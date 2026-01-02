@@ -2,7 +2,6 @@
   "name": "bot-mtb-oz",
   "version": "1.0.0",
   "description": "Backend channel-agnostic para bot de Mensajeria",
-  "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js"
