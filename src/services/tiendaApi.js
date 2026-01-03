@@ -30,36 +30,26 @@ function mapOrder(raw) {
 
 async function getProduct(query) {
   const data = await apiClient.get('/product', { q: query });
-  if (Array.isArray(data)) {
-    return mapProduct(data[0]);
-  }
-  if (data?.product) {
-    return mapProduct(data.product);
-  }
+
+  if (Array.isArray(data)) return mapProduct(data[0]);
+  if (data?.product) return mapProduct(data.product);
   return mapProduct(data);
 }
 
 async function getOrder(orderId) {
   const param = process.env.ORDER_ID_PARAM || 'order_id';
   const data = await apiClient.get('/order', { [param]: orderId });
-  if (Array.isArray(data)) {
-    return mapOrder(data[0]);
-  }
-  if (data?.order) {
-    return mapOrder(data.order);
-  }
+
+  if (Array.isArray(data)) return mapOrder(data[0]);
+  if (data?.order) return mapOrder(data.order);
   return mapOrder(data);
 }
 
 async function listProductsFromApi() {
   try {
     const data = await apiClient.get('/products');
-    if (Array.isArray(data)) {
-      return data.map(mapProduct);
-    }
-    if (Array.isArray(data?.products)) {
-      return data.products.map(mapProduct);
-    }
+    if (Array.isArray(data)) return data.map(mapProduct);
+    if (Array.isArray(data?.products)) return data.products.map(mapProduct);
   } catch (error) {
     return null;
   }
@@ -80,56 +70,31 @@ async function listProductsFromTiendanube() {
   const results = [];
   let page = 1;
   const perPage = 200;
-codex/create-new-node.js-backend-project-moy8m7
-  try {
-    while (true) {
-      const response = await axios.get(`${baseUrl}/products`, {
-        headers,
-        params: { page, per_page: perPage }
-      });
-      if (!Array.isArray(response.data) || response.data.length === 0) {
-        break;
-      }
-      results.push(...response.data.map(mapProduct));
-      if (response.data.length < perPage) {
-        break;
-      }
-      page += 1;
-    }
-  } catch (error) {
-    const status = error.response?.status;
-    const data = error.response?.data;
-    const message = error.message;
-    console.error('[tiendanube] list products error', { status, data, message });
-    return [];
 
   while (true) {
     const response = await axios.get(`${baseUrl}/products`, {
       headers,
       params: { page, per_page: perPage }
     });
-    if (!Array.isArray(response.data) || response.data.length === 0) {
-      break;
-    }
+
+    if (!Array.isArray(response.data) || response.data.length === 0) break;
+
     results.push(...response.data.map(mapProduct));
-    if (response.data.length < perPage) {
-      break;
-    }
+    if (response.data.length < perPage) break;
+
     page += 1;
-main
   }
+
   return results;
 }
 
 async function listProducts() {
   const fromApi = await listProductsFromApi();
-  if (fromApi && fromApi.length) {
-    return fromApi;
-  }
+  if (fromApi && fromApi.length) return fromApi;
+
   const fromTN = await listProductsFromTiendanube();
-  if (fromTN && fromTN.length) {
-    return fromTN;
-  }
+  if (fromTN && fromTN.length) return fromTN;
+
   return [];
 }
 
