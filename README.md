@@ -22,6 +22,13 @@ Backend único (Node.js + Express) para recibir mensajes de múltiples canales (
 - `PRODUCTS_CACHE_TTL_MIN`: TTL del cache de productos.
 - `KITS_COLLECTION_URL`: URL fallback para colección de kits.
 - `TN_STORE_ID`, `TN_ACCESS_TOKEN`, `TN_USER_AGENT`: opcional para sincronizar slugs/urls desde Tiendanube.
+codex/create-new-node.js-backend-project-hrgf3n
+- `WHATSAPP_VERIFY_TOKEN`: token de verificación del webhook.
+- `WHATSAPP_TOKEN`: access token de WhatsApp Cloud API.
+- `WHATSAPP_PHONE_NUMBER_ID`: id del número de WhatsApp.
+- `WHATSAPP_API_VERSION`: versión de Graph API (default `v20.0`).
+
+main
 
 ## Instalación y uso
 ```bash
@@ -73,6 +80,20 @@ curl -X POST http://localhost:3000/message \
   -d '{"channel":"instagram","user_id":"u3","text":"¿La crema hidratante tiene protección solar?"}'
 ```
 
+codex/create-new-node.js-backend-project-hrgf3n
+### WhatsApp webhook verificación
+```bash
+curl -G http://localhost:3000/webhook/whatsapp \
+  --data-urlencode 'hub.mode=subscribe' \
+  --data-urlencode 'hub.verify_token=TU_VERIFY_TOKEN' \
+  --data-urlencode 'hub.challenge=12345'
+```
+
+## Configurar Webhooks de Meta
+Usá la URL pública `https://<tu-dominio>/webhook/whatsapp` y el mismo `WHATSAPP_VERIFY_TOKEN` configurado en el entorno.
+
+
+main
 ## Notas
 - Los links de productos se resuelven por API. Si la API no provee URL, se utiliza un cache local regenerable con datos de productos.
 - Si la API falla, el bot responde con disculpas y ofrece derivar a un asesor.
