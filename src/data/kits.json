@@ -1,0 +1,12 @@
+[
+  {
+    "kit_name": "Kit Piel Iluminada",
+    "kit_id": "kit_piel_iluminada",
+    "products_included": ["sérum iluminador", "crema hidratante"]
+  },
+  {
+    "kit_name": "Kit Rutina Completa",
+    "kit_id": "kit_rutina_completa",
+    "products_included": ["limpiador", "protector solar", "crema hidratante"]
+  }
+]

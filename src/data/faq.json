@@ -1,0 +1,6 @@
+{
+  "spf_keywords": ["spf", "fps", "proteccion solar", "protección solar", "protector solar"],
+  "spf_positive_keywords": ["spf", "fps", "protección solar", "protector solar"],
+  "spf_usage_tip": "Aplicalo 15 minutos antes de la exposición y reaplicá cada 2 horas.",
+  "needs_product_prompt": "¿Sobre qué producto querés saber si tiene protección solar?"
+}
