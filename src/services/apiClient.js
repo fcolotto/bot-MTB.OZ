@@ -6,15 +6,22 @@ function createApiClient() {
     throw new Error('TIENDA_API_BASE_URL no configurado');
   }
 
+  const apiKey =
+    process.env.TIENDA_API_KEY ||
+    process.env.X_API_KEY || // fallback por compatibilidad
+    '';
+
   const headers = {
-    'x-api-key': process.env.X_API_KEY || '',
     'content-type': 'application/json'
   };
+
+  // Solo enviamos header si hay key (evita mandar "x-api-key: " vacío)
+  if (apiKey) headers['x-api-key'] = apiKey;
 
   return axios.create({
     baseURL,
     headers,
-    timeout: 10000
+    timeout: 15000
   });
 }
 

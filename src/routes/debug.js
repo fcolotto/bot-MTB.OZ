@@ -1,18 +1,17 @@
 const express = require('express');
-const productResolver = require('../services/productResolver');
+const tiendaApi = require('../services/tiendaApi');
 
 const router = express.Router();
 
-router.get('/products', async (req, res) => {
+router.get('/tn/products', async (req, res) => {
   try {
-    const products = await productResolver.ensureCache();
+    const products = await tiendaApi.listProducts();
     return res.json({
       ok: true,
       count: products.length,
       sample: products.slice(0, 3)
     });
   } catch (error) {
-    console.error('[debug] products error', error.message);
     return res.status(500).json({
       ok: false,
       error: {
