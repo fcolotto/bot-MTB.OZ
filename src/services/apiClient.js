@@ -1,23 +1,34 @@
 const axios = require('axios');
 
-const baseURL =
-  process.env.TIENDA_API_BASE_URL ||
-  process.env.PUBLIC_BASE_URL ||
-  'http://127.0.0.1:3000';
-
-const client = axios.create({
-  baseURL,
-  timeout: 15000
-});
-
-async function get(path, params = {}) {
-  const headers = {};
-  if (process.env.TIENDA_API_KEY) {
-    headers['x-api-key'] = process.env.TIENDA_API_KEY;
+function createApiClient() {
+  const baseURL = process.env.TIENDA_API_BASE_URL;
+  if (!baseURL) {
+    throw new Error('TIENDA_API_BASE_URL no configurado');
   }
 
-  const resp = await client.get(path, { params, headers });
-  return resp.data;
+  const apiKey =
+    process.env.TIENDA_API_KEY ||
+    process.env.X_API_KEY || // fallback por compatibilidad
+    '';
+
+  const headers = {
+    'content-type': 'application/json'
+  };
+
+  // Solo enviamos header si hay key (evita mandar "x-api-key: " vacío)
+  if (apiKey) headers['x-api-key'] = apiKey;
+
+  return axios.create({
+    baseURL,
+    headers,
+    timeout: 15000
+  });
+}
+
+async function get(path, params = {}) {
+  const client = createApiClient();
+  const response = await client.get(path, { params });
+  return response.data;
 }
 
 module.exports = { get };

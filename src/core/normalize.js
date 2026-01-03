@@ -1,10 +1,13 @@
 function normalize(value) {
   if (!value) return '';
-  return value
-    .toString()
+
+  return String(value)
+    .toLowerCase()
     .normalize('NFD')
     .replace(/\p{Diacritic}/gu, '')
-    .toLowerCase()
+    .replace(/[‐-‒–—−]/g, '-')      // normaliza guiones raros
+    .replace(/[^a-z0-9\s-]/g, ' ')  // elimina símbolos
+    .replace(/\s+/g, ' ')           // colapsa espacios
     .trim();
 }
 
