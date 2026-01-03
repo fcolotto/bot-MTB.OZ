@@ -8,6 +8,8 @@ const app = express();
 
 app.use(express.json({ limit: '1mb' }));
 
+app.get('/', (req, res) => res.status(200).send('ok'));
+
 app.use('/health', healthRoute);
 app.use('/message', messageRoute);
 app.use('/webhook/whatsapp', whatsappRoute);
