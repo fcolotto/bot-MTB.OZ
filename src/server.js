@@ -3,6 +3,7 @@ const express = require('express');
 const healthRoute = require('./routes/health');
 const messageRoute = require('./routes/message');
 const whatsappRoute = require('./routes/whatsapp');
+const debugRoute = require('./routes/debug');
 
 const app = express();
 
@@ -13,6 +14,7 @@ app.get('/', (req, res) => res.status(200).send('ok'));
 
 app.use('/health', healthRoute);
 app.use('/message', messageRoute);
+app.use('/debug', debugRoute);
 
 app.use((err, req, res, next) => {
   console.error('[server] error', err.message);

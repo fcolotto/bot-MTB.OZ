@@ -4,6 +4,7 @@ const tiendaApi = require('./tiendaApi');
 const { normalize } = require('../core/normalize');
 
 const cachePath = path.join(__dirname, '..', 'cache', 'products-cache.json');
+const cacheDir = path.dirname(cachePath);
 
 function readCache() {
   try {
@@ -15,6 +16,9 @@ function readCache() {
 }
 
 function writeCache(products) {
+  if (!fs.existsSync(cacheDir)) {
+    fs.mkdirSync(cacheDir, { recursive: true });
+  }
   const payload = {
     generated_at: new Date().toISOString(),
     products
@@ -33,10 +37,15 @@ async function syncCache() {
   try {
     const products = await tiendaApi.listProducts();
     if (products && products.length) {
-      writeCache(products);
+      try {
+        writeCache(products);
+      } catch (error) {
+        console.error('[cache] write error', error.message);
+      }
     }
     return products || [];
   } catch (error) {
+    console.error('[cache] sync error', error.message);
     return [];
   }
 }

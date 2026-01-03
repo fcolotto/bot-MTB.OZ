@@ -80,19 +80,27 @@ async function listProductsFromTiendanube() {
   const results = [];
   let page = 1;
   const perPage = 200;
-  while (true) {
-    const response = await axios.get(`${baseUrl}/products`, {
-      headers,
-      params: { page, per_page: perPage }
-    });
-    if (!Array.isArray(response.data) || response.data.length === 0) {
-      break;
+  try {
+    while (true) {
+      const response = await axios.get(`${baseUrl}/products`, {
+        headers,
+        params: { page, per_page: perPage }
+      });
+      if (!Array.isArray(response.data) || response.data.length === 0) {
+        break;
+      }
+      results.push(...response.data.map(mapProduct));
+      if (response.data.length < perPage) {
+        break;
+      }
+      page += 1;
     }
-    results.push(...response.data.map(mapProduct));
-    if (response.data.length < perPage) {
-      break;
-    }
-    page += 1;
+  } catch (error) {
+    const status = error.response?.status;
+    const data = error.response?.data;
+    const message = error.message;
+    console.error('[tiendanube] list products error', { status, data, message });
+    return [];
   }
   return results;
 }
