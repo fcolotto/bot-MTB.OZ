@@ -8,11 +8,12 @@ const app = express();
 
 app.use(express.json({ limit: '1mb' }));
 
-app.use('/webhook/whatsapp', whatsappRoute);
+// Opcional pero útil para testear rápido
 app.get('/', (req, res) => res.status(200).send('ok'));
 
 app.use('/health', healthRoute);
 app.use('/message', messageRoute);
+app.use('/webhook/whatsapp', whatsappRoute);
 
 app.use((err, req, res, next) => {
   console.error('[server] error', err.message);
