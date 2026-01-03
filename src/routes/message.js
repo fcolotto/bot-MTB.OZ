@@ -1,4 +1,13 @@
 const express = require('express');
+codex/create-new-node.js-backend-project-moy8m7
+const { handleMessage } = require('../core/messageHandler');
+
+const router = express.Router();
+
+router.post('/', async (req, res) => {
+  const result = await handleMessage(req.body);
+  return res.status(result.status).json(result.body);
+
 const { detectIntent } = require('../core/intents');
 const { suggestKits } = require('../core/kitSuggester');
 const {
@@ -122,6 +131,7 @@ router.post('/', async (req, res) => {
     console.error('[message] error', error.message);
     return res.status(500).json(composeErrorResponse());
   }
+main
 });
 
 module.exports = router;

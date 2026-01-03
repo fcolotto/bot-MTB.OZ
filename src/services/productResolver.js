@@ -4,6 +4,10 @@ const tiendaApi = require('./tiendaApi');
 const { normalize } = require('../core/normalize');
 
 const cachePath = path.join(__dirname, '..', 'cache', 'products-cache.json');
+codex/create-new-node.js-backend-project-moy8m7
+const cacheDir = path.dirname(cachePath);
+
+main
 
 function readCache() {
   try {
@@ -15,6 +19,12 @@ function readCache() {
 }
 
 function writeCache(products) {
+codex/create-new-node.js-backend-project-moy8m7
+  if (!fs.existsSync(cacheDir)) {
+    fs.mkdirSync(cacheDir, { recursive: true });
+  }
+
+main
   const payload = {
     generated_at: new Date().toISOString(),
     products
@@ -33,10 +43,22 @@ async function syncCache() {
   try {
     const products = await tiendaApi.listProducts();
     if (products && products.length) {
+codex/create-new-node.js-backend-project-moy8m7
+      try {
+        writeCache(products);
+      } catch (error) {
+        console.error('[cache] write error', error.message);
+      }
+    }
+    return products || [];
+  } catch (error) {
+    console.error('[cache] sync error', error.message);
+
       writeCache(products);
     }
     return products || [];
   } catch (error) {
+main
     return [];
   }
 }
