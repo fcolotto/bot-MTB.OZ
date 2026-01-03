@@ -64,7 +64,8 @@ router.post('/', async (req, res) => {
       console.log('[wa] replied ok');
     } catch (error) {
       const detail = error.response?.data || error.message;
-      console.error('[wa] send error', detail);
+      const status = error.response?.status;
+      console.error('[wa] send error', status, detail);
     }
     return res.sendStatus(200);
   }
@@ -85,7 +86,8 @@ router.post('/', async (req, res) => {
       console.log('[wa] replied ok');
     } catch (error) {
       const detail = error.response?.data || error.message;
-      console.error('[wa] send error', detail);
+      const status = error.response?.status;
+      console.error('[wa] send error', status, detail);
     }
   } catch (error) {
     const detail = error.response?.data || error.message;
@@ -95,7 +97,8 @@ router.post('/', async (req, res) => {
       console.log('[wa] replied ok');
     } catch (sendError) {
       const sendDetail = sendError.response?.data || sendError.message;
-      console.error('[wa] send error', sendDetail);
+      const sendStatus = sendError.response?.status;
+      console.error('[wa] send error', sendStatus, sendDetail);
     }
   }
 
