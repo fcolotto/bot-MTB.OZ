@@ -52,6 +52,7 @@ async function sendWhatsAppMessage(to, text) {
 }
 
 router.get('/', (req, res) => {
+  console.log('[wa] verification request');
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
