@@ -20,6 +20,14 @@ app.get('/healthz', (req, res) => res.status(200).json({ ok: true }));
 // Root
 app.get('/', (req, res) => res.status(200).send('ok'));
 
+app.get('/version', (req, res) => {
+  res.json({
+    ok: true,
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
+    node: process.version
+  });
+});
+
 // Routes
 app.use('/webhook/whatsapp', whatsappRoute);
 app.use('/health', healthRoute);
