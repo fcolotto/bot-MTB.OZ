@@ -1,4 +1,6 @@
 require('dotenv').config();
+console.log('[boot] server.js loaded');
+
 const express = require('express');
 
 const healthRoute = require('./routes/health');
