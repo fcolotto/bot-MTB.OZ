@@ -3,71 +3,55 @@ const path = require('path');
 const tiendaApi = require('./tiendaApi');
 const { normalize } = require('../core/normalize');
 
-// --------------------
-// Config cache
-// --------------------
-const cachePath =
-  process.env.PRODUCTS_CACHE_PATH || '/tmp/mtb-products-cache.json';
-
+const cachePath = process.env.PRODUCTS_CACHE_PATH || '/tmp/mtb-products-cache.json';
 const cacheDir = path.dirname(cachePath);
 
-// --------------------
-// Helpers
-// --------------------
-function pickLang(value) {
-  if (value === null || value === undefined) return null;
-  if (typeof value === 'string' || typeof value === 'number') return value;
-  return value.es || value.pt || value.en || null;
-}
+const STOPWORDS = [
+  'hola',
+  'buenas',
+  'quiero',
+  'quisiera',
+  'necesito',
+  'saber',
+  'decirme',
+  'me decis',
+  'por favor',
+  'precio',
+  'cuanto',
+  'cuesta',
+  'vale',
+  'sale',
+  'link',
+  'para',
+  'que',
+  'sirve',
+  'info',
+  'informacion',
+  'de',
+  'la',
+  'el',
+  'los',
+  'las',
+  'un',
+  'una',
+  'producto',
+  'crema' // importante: “crema” suele meter ruido
+];
 
-function normalizeProduct(p) {
-  if (!p) return null;
-
-  const name = pickLang(p.name) || p.title || p.product_name || '';
-  const slug = p.slug || '';
-  const description = pickLang(p.description) || '';
-
-  const variants = Array.isArray(p.variants)
-    ? p.variants.map((v) => ({
-        id: v.id ?? null,
-        name: pickLang(v.name) || v.sku || '',
-        price: pickLang(v.price) ?? pickLang(v.promotional_price) ?? null,
-        sku: v.sku || null,
-        raw: v
-      }))
-    : [];
-
-  return {
-    id: p.id ?? p.product_id ?? null,
-    name,
-    slug,
-    description,
-    price:
-      pickLang(p.price) ??
-      pickLang(p.promotional_price) ??
-      variants[0]?.price ??
-      null,
-    promotional_price: pickLang(p.promotional_price) ?? null,
-    url: p.url || p.permalink || p.canonical_url || null,
-    tags: Array.isArray(p.tags) ? p.tags : [],
-    variants,
-    raw: p
-  };
-}
-
-// --------------------
-// Cache I/O
-// --------------------
 function readCache() {
   try {
     const raw = fs.readFileSync(cachePath, 'utf-8');
     const parsed = JSON.parse(raw);
 
+    if (parsed && !parsed.updated_at && parsed.generated_at) {
+      parsed.updated_at = parsed.generated_at;
+    }
+
     return {
       updated_at: parsed?.updated_at || null,
       products: Array.isArray(parsed?.products) ? parsed.products : []
     };
-  } catch {
+  } catch (error) {
     return { updated_at: null, products: [] };
   }
 }
@@ -77,18 +61,11 @@ function writeCache(products) {
     if (!fs.existsSync(cacheDir)) {
       fs.mkdirSync(cacheDir, { recursive: true });
     }
-
-    fs.writeFileSync(
-      cachePath,
-      JSON.stringify(
-        {
-          updated_at: new Date().toISOString(),
-          products
-        },
-        null,
-        2
-      )
-    );
+    const payload = {
+      updated_at: new Date().toISOString(),
+      products: Array.isArray(products) ? products : []
+    };
+    fs.writeFileSync(cachePath, JSON.stringify(payload, null, 2));
   } catch (error) {
     console.error('[cache] write error', error.message);
   }
@@ -101,36 +78,76 @@ function isCacheStale(cache) {
   return ageMs > ttlMin * 60 * 1000;
 }
 
-// --------------------
-// Search
-// --------------------
-function findInCache(cache, query) {
-  const q = normalize(query);
-  if (!q) return null;
+function cleanQuery(query) {
+  const q = normalize(query || '');
+  if (!q) return '';
 
-  return (
-    cache.products.find((p) => {
-      return (
-        normalize(p.name).includes(q) ||
-        normalize(p.slug).includes(q)
-      );
-    }) || null
-  );
+  // sacar “50 ml”, “195ml”, etc.
+  const noUnits = q.replace(/\b\d+\s*ml\b/g, ' ').replace(/\bml\b/g, ' ');
+
+  // sacar números sueltos (a veces ensucian)
+  const noNumbers = noUnits.replace(/\b\d+\b/g, ' ');
+
+  const words = noNumbers
+    .split(' ')
+    .map((w) => w.trim())
+    .filter(Boolean)
+    .filter((w) => !STOPWORDS.includes(w));
+
+  return words.join(' ').trim();
 }
 
-// --------------------
-// Sync cache
-// --------------------
+function scoreProduct(product, tokens) {
+  const name = normalize(product?.name || '');
+  const slug = normalize(product?.slug || '');
+
+  if (!name && !slug) return 0;
+
+  let score = 0;
+  for (const t of tokens) {
+    if (!t) continue;
+    if (name.includes(t)) score += 3;
+    else if (slug.includes(t)) score += 2;
+  }
+
+  // pequeño bonus si el match es “más largo”
+  score += Math.min(tokens.length, 6);
+
+  return score;
+}
+
+function findInCache(cache, query) {
+  const cleaned = cleanQuery(query);
+  const normalizedQuery = cleaned || normalize(query || '');
+  if (!normalizedQuery) return null;
+
+  const tokens = normalizedQuery.split(' ').filter(Boolean);
+  if (!tokens.length) return null;
+
+  let best = null;
+  let bestScore = 0;
+
+  for (const product of cache.products || []) {
+    const s = scoreProduct(product, tokens);
+    if (s > bestScore) {
+      bestScore = s;
+      best = product;
+    }
+  }
+
+  // umbral mínimo: evita false positives
+  if (bestScore < 6) return null;
+
+  return best;
+}
+
 async function syncCache() {
   try {
     const products = await tiendaApi.listProducts();
-    const normalized = (products || [])
-      .map(normalizeProduct)
-      .filter(Boolean);
-
-    console.log(`[cache] refreshed n=${normalized.length}`);
-    if (normalized.length) writeCache(normalized);
-    return normalized;
+    const safeProducts = products || [];
+    console.log(`[cache] refreshed n=${safeProducts.length}`);
+    if (safeProducts.length) writeCache(safeProducts);
+    return safeProducts;
   } catch (error) {
     console.error('[cache] sync error', error.message);
     return [];
@@ -145,22 +162,25 @@ async function ensureCache() {
   return syncCache();
 }
 
-// --------------------
-// Resolve product
-// --------------------
 async function resolveProduct(query) {
   if (!query) return null;
 
+  // 1) intentar live con query limpio (mejor hit)
+  const cleaned = cleanQuery(query) || query;
+
   let liveProduct = null;
   try {
-    const rawLive = await tiendaApi.getProduct(query);
-    liveProduct = normalizeProduct(rawLive);
-  } catch {
+    liveProduct = await tiendaApi.getProduct(cleaned);
+  } catch (error) {
     liveProduct = null;
   }
 
-  if (liveProduct?.name) return liveProduct;
+  // si el live ya trae name o url, joya
+  if (liveProduct && (liveProduct.name || liveProduct.url)) {
+    return liveProduct;
+  }
 
+  // 2) cache match
   const cache = readCache();
   let cachedProduct = findInCache(cache, query);
 
@@ -169,17 +189,18 @@ async function resolveProduct(query) {
     cachedProduct = findInCache(readCache(), query);
   }
 
-  if (!cachedProduct) return liveProduct;
+  if (cachedProduct) {
+    return {
+      ...cachedProduct,
+      // priorizamos lo que venga del live si existe
+      price: liveProduct?.price ?? cachedProduct.price ?? null,
+      url: liveProduct?.url ?? cachedProduct.url ?? null,
+      name: liveProduct?.name ?? cachedProduct.name ?? null
+    };
+  }
 
-  return {
-    ...cachedProduct,
-    price: liveProduct?.price ?? cachedProduct.price ?? null,
-    url: liveProduct?.url ?? cachedProduct.url ?? null,
-    variants:
-      liveProduct?.variants?.length
-        ? liveProduct.variants
-        : cachedProduct.variants
-  };
+  // 3) último fallback
+  return liveProduct;
 }
 
 module.exports = {

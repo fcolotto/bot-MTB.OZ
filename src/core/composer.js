@@ -15,6 +15,7 @@ function formatCurrency(value) {
 
 function extractSpfInfo(product) {
   if (!product) return null;
+
   if (product.raw?.spf === true || product.raw?.has_spf === true) return true;
   if (product.raw?.spf === false || product.raw?.has_spf === false) return false;
 
@@ -25,58 +26,11 @@ function extractSpfInfo(product) {
 
   if (!haystack) return null;
 
-  const hasSpf = faqData.spf_positive_keywords.some((keyword) => {
-    return haystack.includes(normalize(keyword));
-  });
+  const hasSpf = (faqData.spf_positive_keywords || []).some((keyword) =>
+    haystack.includes(normalize(keyword))
+  );
 
   return hasSpf ? true : null;
-}
-
-function pickLang(obj) {
-  if (obj == null) return null;
-  if (typeof obj === 'string' || typeof obj === 'number') return obj;
-  return obj.es || obj.pt || obj.en || null;
-}
-
-/**
- * Intenta obtener el precio del producto de forma robusta:
- * - price puede venir como number/string o como objeto por idioma
- * - si no está en product.price, puede estar en variants
- */
-function getPrice(product) {
-  if (!product) return null;
-
-  const direct =
-    product.price ??
-    product.promotional_price ??
-    product.compare_at_price ??
-    product.price_amount ??
-    null;
-
-  if (direct != null) {
-    const v = pickLang(direct);
-    if (v != null && v !== '') return v;
-  }
-
-  if (Array.isArray(product.variants) && product.variants.length > 0) {
-    const preferred =
-      product.variants.find((v) => v && (v.available === true || Number(v.stock) > 0)) ||
-      product.variants[0];
-
-    const vp =
-      preferred?.price ??
-      preferred?.promotional_price ??
-      preferred?.compare_at_price ??
-      preferred?.price_amount ??
-      null;
-
-    if (vp != null) {
-      const v = pickLang(vp);
-      if (v != null && v !== '') return v;
-    }
-  }
-
-  return null;
 }
 
 function composeOrderResponse(order) {
@@ -89,7 +43,9 @@ function composeOrderResponse(order) {
   }
 
   const items = Array.isArray(order.items)
-    ? order.items.map((item) => item.name || item.title || item.product_name).filter(Boolean)
+    ? order.items
+        .map((item) => item.name || item.title || item.product_name)
+        .filter(Boolean)
     : [];
 
   const itemsText = items.length ? `Productos: ${items.join(', ')}.` : '';
@@ -108,67 +64,71 @@ function composeOrderResponse(order) {
 function composePriceResponse(product, kits = [], kitLinks = []) {
   if (!product) {
     return {
-      text: 'No encontré ese producto. ¿Podés decirme el nombre exacto como aparece en la tienda?',
+      text: 'No encontré ese producto. ¿Me decís el nombre exacto (y si aplica, el tamaño: 50 ml / 195 ml)?',
       links: [],
       meta: { intent: 'price', status: 'not_found' }
     };
   }
 
+  const name = (product.name || '').trim();
+  const safeName = name || 'ese producto';
+
+  const hasPrice = product.price !== null && product.price !== undefined && product.price !== '';
+  const priceText = hasPrice
+    ? `El precio de ${safeName} es ${formatCurrency(product.price)}.`
+    : `Encontré ${safeName}, pero ahora mismo no me está llegando el precio.`;
+
   const links = [];
   if (product.url) {
-    links.push({ label: `Ver ${product.name}`, url: product.url });
+    links.push({ label: `Ver ${safeName}`, url: product.url });
   }
 
-  const priceRaw = getPrice(product);
-  const priceFormatted = priceRaw != null ? formatCurrency(priceRaw) : null;
-
-  // Si no hay precio, pedimos variante/tamaño para desambiguar (y porque muchas veces el precio vive en variants)
-  if (priceFormatted == null) {
-    const followUp = '¿Me decís cuál tamaño/variante querés (por ejemplo 50 ml o 195 ml) así lo busco exacto?';
-    const kitText = kits.length
-      ? ' También puede estar en estos kits: ' + kits.map((k) => k.kit_name).join(', ') + '.'
+  if (kits.length) {
+    const kitNames = kits.map((k) => k.kit_name).filter(Boolean);
+    const kitText = kitNames.length
+      ? `También puede venir en estos kits: ${kitNames.join(', ')}.`
       : '';
 
     return {
-      text: `Encontré ${product.name}, pero no me está llegando el precio ahora mismo. ${followUp}${kitText}`.trim(),
-      links: kits.length ? [...links, ...kitLinks] : links,
-      meta: { intent: 'price', status: 'missing_price', product_id: product.id || null }
-    };
-  }
-
-  const priceText = `El precio de ${product.name} es ${priceFormatted}.`;
-
-  if (kits.length) {
-    const kitText = 'También podés encontrarlo en estos kits: ' + kits.map((kit) => kit.kit_name).join(', ') + '.';
-    return {
       text: `${priceText} ${kitText}`.trim(),
-      links: [...links, ...kitLinks],
-      meta: { intent: 'price', status: 'ok', product_id: product.id || null }
+      links: [...links, ...(kitLinks || [])],
+      meta: {
+        intent: 'price',
+        status: hasPrice ? 'ok' : 'missing_price',
+        product_id: product.id || null
+      }
     };
   }
 
   return {
     text: priceText,
     links,
-    meta: { intent: 'price', status: 'ok', product_id: product.id || null }
+    meta: {
+      intent: 'price',
+      status: hasPrice ? 'ok' : 'missing_price',
+      product_id: product.id || null
+    }
   };
 }
 
 function composeFaqResponse(product, ozoneLink) {
   if (!product) {
     return {
-      text: faqData.needs_product_prompt,
+      text: faqData.needs_product_prompt || '¿De qué producto querés info?',
       links: [],
       meta: { intent: 'faq', status: 'needs_product' }
     };
   }
 
+  const name = (product.name || '').trim();
+  const safeName = name || 'ese producto';
+
   const spfInfo = extractSpfInfo(product);
 
   if (spfInfo === true) {
     return {
-      text: `Sí, ${product.name} tiene protección solar. ${faqData.spf_usage_tip}`,
-      links: product.url ? [{ label: `Ver ${product.name}`, url: product.url }] : [],
+      text: `Sí, ${safeName} tiene protección solar. ${faqData.spf_usage_tip || ''}`.trim(),
+      links: product.url ? [{ label: `Ver ${safeName}`, url: product.url }] : [],
       meta: { intent: 'faq', product_id: product.id || null, spf: true }
     };
   }
@@ -176,25 +136,25 @@ function composeFaqResponse(product, ozoneLink) {
   if (spfInfo === false) {
     const links = [];
     if (ozoneLink?.url) {
-      links.push({ label: ozoneLink.label || ozoneData.label, url: ozoneLink.url });
+      links.push({ label: ozoneLink.label || ozoneData.label || 'Ver Ozone', url: ozoneLink.url });
     }
     return {
-      text: `Este producto no tiene protección solar. ${ozoneData.copy}`,
+      text: `Este producto no tiene protección solar. ${ozoneData.copy || ''}`.trim(),
       links,
       meta: { intent: 'faq', product_id: product.id || null, spf: false }
     };
   }
 
   return {
-    text: 'No tengo información confirmada sobre protección solar para este producto. ¿Querés que lo revise un asesor?',
-    links: [],
+    text: `No tengo información confirmada sobre protección solar para ${safeName}. ¿Querés que lo revise un asesor?`,
+    links: product.url ? [{ label: `Ver ${safeName}`, url: product.url }] : [],
     meta: { intent: 'faq', product_id: product.id || null, spf: 'unknown' }
   };
 }
 
 function composeErrorResponse() {
   return {
-    text: 'Perdón, tuve un problema para obtener la información. ¿Querés que te derive con un asesor? Te contactamos por WhatsApp.',
+    text: 'Perdón, tuve un problema para obtener la información. ¿Querés que te derive con un asesor?',
     links: [],
     meta: { intent: 'error' }
   };
