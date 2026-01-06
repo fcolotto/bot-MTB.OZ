@@ -20,30 +20,25 @@ const { normalize } = require('./normalize');
 function extractProductQuery(text, keywords) {
   let result = normalize(text);
 
-  // Sacamos keywords explícitas
+  // 1) remover keywords explícitas
   (keywords || []).forEach((keyword) => {
     result = result.replace(normalize(keyword), ' ');
   });
 
-  // Sacamos frases típicas “de conversación”
+  // 2) remover frases típicas de conversación (sin romper variantes ml)
   const stopPhrases = [
     'hola',
     'buenas',
     'buenos dias',
     'buenas tardes',
+    'buenas noches',
     'quiero saber',
+    'quisiera saber',
     'me decis',
-    'me decis por favor',
+    'me dices',
     'por favor',
     'necesito',
     'consulta',
-    'para que sirve',
-    'sirve para',
-    'beneficios',
-    'modo de uso',
-    'como se usa',
-    'ingredientes',
-    'rutina',
     'info',
     'informacion',
     'información',
@@ -52,14 +47,18 @@ function extractProductQuery(text, keywords) {
     'vale',
     'valor',
     'cuanto',
-    'cuánto'
+    'cuánto',
+    'el',
+    'la',
+    'de',
+    'del'
   ];
 
   stopPhrases.forEach((p) => {
-    result = result.replace(normalize(p), ' ');
+    result = result.replace(new RegExp(`\\b${normalize(p)}\\b`, 'g'), ' ');
   });
 
-  // Normalizamos espacios
+  // 3) normalizar espacios
   result = result.replace(/\s+/g, ' ').trim();
 
   return result;
@@ -118,6 +117,17 @@ async function handleMessage(payload) {
   const intentData = detectIntent(text);
 
   try {
+    // ---- GREETING ----
+    if (intentData.intent === 'greeting') {
+      const draftBody = {
+        text: '¡Hola! 😊 ¿Querés saber precio, info de un producto o el estado de un pedido?',
+        links: [],
+        meta: { intent: 'greeting' }
+      };
+      await maybeRewriteText({ userText: text, draftBody });
+      return { status: 200, body: draftBody };
+    }
+
     // ---- ORDER ----
     if (intentData.intent === 'order') {
       if (intentData.orderId) {
@@ -163,21 +173,23 @@ async function handleMessage(payload) {
       return { status: 200, body: draftBody };
     }
 
-    // ---- INFO (NUEVO) ----
+    // ---- INFO ----
     if (intentData.intent === 'info') {
       const productQuery = extractProductQuery(text, [
         'para que sirve',
         'para qué sirve',
         'sirve para',
         'beneficios',
+        'beneficio',
         'modo de uso',
         'como se usa',
         'cómo se usa',
         'ingredientes',
         'rutina',
-        'info',
-        'informacion',
-        'información'
+        'que hace',
+        'qué hace',
+        'que es',
+        'qué es'
       ]);
 
       const product = productQuery ? await productResolver.resolveProduct(productQuery) : null;
@@ -188,8 +200,8 @@ async function handleMessage(payload) {
       return { status: 200, body: draftBody };
     }
 
-    // ---- FAQ (SPF) ----
-    if (intentData.intent === 'faq') {
+    // ---- FAQ SPF ----
+    if (intentData.intent === 'faq_spf') {
       const productQuery = extractProductQuery(text, faqData.spf_keywords || []);
       const product = productQuery ? await productResolver.resolveProduct(productQuery) : null;
       const ozoneProduct = await productResolver.resolveProduct(ozoneData.query);

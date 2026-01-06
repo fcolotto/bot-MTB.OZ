@@ -3,13 +3,31 @@ const { normalize } = require('./normalize');
 
 function findOrderId(text) {
   const t = String(text || '');
-  // busca un número de pedido razonable (4-10 dígitos)
   const m = t.match(/\b(\d{4,10})\b/);
   return m ? m[1] : null;
 }
 
 function includesAny(hay, keywords) {
-  return keywords.some((k) => hay.includes(normalize(k)));
+  return (keywords || []).some((k) => hay.includes(normalize(k)));
+}
+
+function isGreetingOnly(normalizedText) {
+  const t = normalize(normalizedText);
+  if (!t) return false;
+
+  const greetings = [
+    'hola',
+    'buenas',
+    'buenos dias',
+    'buenas tardes',
+    'buenas noches',
+    'hey',
+    'holi'
+  ];
+
+  // si el mensaje es solo un saludo (o saludo + emoji)
+  const cleaned = t.replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  return greetings.includes(cleaned);
 }
 
 function detectIntent(text) {
@@ -28,11 +46,13 @@ function detectIntent(text) {
     'donde esta',
     'dónde está',
     'cuando llega',
-    'cuándo llega'
+    'cuándo llega',
+    'numero de pedido',
+    'número de pedido'
   ];
 
   const orderId = findOrderId(raw);
-  const isOrder = orderId || includesAny(t, orderKeywords);
+  const isOrder = Boolean(orderId) || includesAny(t, orderKeywords);
 
   if (isOrder) {
     return {
@@ -42,13 +62,33 @@ function detectIntent(text) {
     };
   }
 
+  // GREETING (solo saludo)
+  if (isGreetingOnly(t)) {
+    return { intent: 'greeting' };
+  }
+
   // PRICE
   const priceKeywords = ['precio', 'cuesta', 'vale', 'valor', 'cuanto', 'cuánto', 'coste'];
   if (includesAny(t, priceKeywords)) {
     return { intent: 'price' };
   }
 
-  // INFO (lo que te falta)
+  // FAQ SPF (más específico: va antes que info)
+  const spfKeywords = [
+    'spf',
+    'proteccion solar',
+    'protección solar',
+    'protector solar',
+    'tiene spf',
+    'tiene filtro',
+    'tiene proteccion',
+    'tiene protección'
+  ];
+  if (includesAny(t, spfKeywords)) {
+    return { intent: 'faq_spf' };
+  }
+
+  // INFO (uso/beneficios/ingredientes)
   const infoKeywords = [
     'para que sirve',
     'para qué sirve',
@@ -75,12 +115,6 @@ function detectIntent(text) {
 
   if (includesAny(t, infoKeywords)) {
     return { intent: 'info' };
-  }
-
-  // FAQ SPF (lo que ya tenías)
-  const spfKeywords = ['spf', 'proteccion solar', 'protección solar', 'protector solar', 'tiene spf'];
-  if (includesAny(t, spfKeywords)) {
-    return { intent: 'faq' };
   }
 
   return { intent: 'unknown' };
