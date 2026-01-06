@@ -3,9 +3,6 @@ const faqData = require('../data/faq.json');
 const ozoneData = require('../data/ozone.json');
 const { normalize } = require('./normalize');
 
-/**
- * Decode básico de entidades HTML comunes (WhatsApp-friendly)
- */
 function decodeHtmlEntities(str) {
   return String(str || '')
     .replace(/&nbsp;/g, ' ')
@@ -14,7 +11,6 @@ function decodeHtmlEntities(str) {
     .replace(/&#39;/g, "'")
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
-    // entidades numéricas: &#225;
     .replace(/&#(\d+);/g, (_, code) => {
       try {
         return String.fromCharCode(Number(code));
@@ -24,13 +20,6 @@ function decodeHtmlEntities(str) {
     });
 }
 
-/**
- * Limpieza de HTML:
- * - Convierte <br> y </p> a saltos
- * - Quita tags
- * - Decodifica entidades
- * - Normaliza espacios / saltos
- */
 function stripHtml(html) {
   const text = String(html || '')
     .replace(/<br\s*\/?>/gi, '\n')
@@ -42,7 +31,6 @@ function stripHtml(html) {
 
   const decoded = decodeHtmlEntities(text);
 
-  // normalizar saltos y espacios
   return decoded
     .replace(/[ \t]+/g, ' ')
     .replace(/\n[ \t]+/g, '\n')
@@ -58,23 +46,49 @@ function truncate(text, max = 520) {
 }
 
 /**
+ * Parse numérico robusto:
+ * - Soporta "3.559.500" (miles con puntos)
+ * - Soporta "35,595" / "35595" (si viniera con coma)
+ */
+function toNumberLoose(value) {
+  if (value === null || value === undefined) return NaN;
+  if (typeof value === 'number') return value;
+
+  const s = String(value).trim();
+  if (!s) return NaN;
+
+  // Caso AR: miles con puntos -> los sacamos
+  // Caso coma decimal -> la pasamos a punto
+  const normalized = s
+    .replace(/\./g, '')     // "3.559.500" -> "3559500"
+    .replace(/,/g, '.');    // "35595,50" -> "35595.50"
+
+  const n = Number(normalized);
+  return Number.isNaN(n) ? NaN : n;
+}
+
+/**
  * Normaliza montos ARS:
- * Tiendanube a veces devuelve centavos (ej 3559500) y a veces pesos (35595).
- * Heurística: si es entero grande y divisible por 100 => centavos.
- * Se puede forzar con PRICE_IS_CENTS=true.
+ * - PRICE_IS_CENTS=true => divide por 100 siempre
+ * - Si es "muy grande" para un precio típico de tu tienda => asumimos centavos y dividimos por 100
+ *
+ * Umbral elegido: 500.000 ARS.
+ * En cosmética, un precio real arriba de 500k es rarísimo; si algún día vendés un kit carísimo,
+ * podés subir/bajar el umbral con PRICE_CENTS_THRESHOLD.
  */
 function normalizeArsAmount(value) {
   if (value === null || value === undefined) return null;
 
-  const n = Number(value);
+  const n = toNumberLoose(value);
   if (Number.isNaN(n)) return value;
 
   const forceCents = String(process.env.PRICE_IS_CENTS || '').toLowerCase() === 'true';
   if (forceCents) return n / 100;
 
-  if (Number.isInteger(n) && n >= 100000 && n % 100 === 0) {
-    return n / 100;
-  }
+  const threshold = Number(process.env.PRICE_CENTS_THRESHOLD || 500000);
+
+  // Si parece un precio “demasiado grande”, casi seguro son centavos
+  if (n >= threshold) return n / 100;
 
   return n;
 }
@@ -154,36 +168,39 @@ function composePriceResponse(product, kits = [], kitLinks = []) {
   }
 
   const name = product.name || 'ese producto';
-  const price = product.price != null ? formatCurrency(product.price) : null;
+
+  // ✅ Normalización fuerte acá (por si viniera en formato raro)
+  const normalizedPrice = product.price != null ? normalizeArsAmount(product.price) : null;
+  const priceTextValue = normalizedPrice != null ? formatCurrency(normalizedPrice) : null;
 
   const links = [];
   if (product.url) links.push({ label: `Ver ${name}`, url: product.url });
 
   const extras = buildExtrasLinks();
 
-  const baseText = price
-    ? `Precio de ${name}: ${price}.`
+  const baseText = priceTextValue
+    ? `El precio de ${name} es ${priceTextValue}.`
     : `Encontré ${name}, pero no me está llegando el precio ahora mismo.`;
 
-  let extraText = '';
-  if (extras.length) {
-    extraText = ' Si querés, te dejo links de promos/medios de pago/envíos.';
-  }
+  const extraText = extras.length
+    ? ' Si querés, te dejo links de promos/medios de pago/envíos.'
+    : '';
 
   if (kits.length) {
     const kitText =
       ' También podés encontrarlo en estos kits: ' + kits.map((k) => k.kit_name).join(', ') + '.';
+
     return {
       text: `${baseText}${kitText}${extraText}`.trim(),
       links: [...links, ...kitLinks, ...extras],
-      meta: { intent: 'price', product_id: product.id || null, status: price ? 'ok' : 'missing_price' }
+      meta: { intent: 'price', product_id: product.id || null, status: priceTextValue ? 'ok' : 'missing_price' }
     };
   }
 
   return {
     text: `${baseText}${extraText}`.trim(),
     links: [...links, ...extras],
-    meta: { intent: 'price', product_id: product.id || null, status: price ? 'ok' : 'missing_price' }
+    meta: { intent: 'price', product_id: product.id || null, status: priceTextValue ? 'ok' : 'missing_price' }
   };
 }
 
