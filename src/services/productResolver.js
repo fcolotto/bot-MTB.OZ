@@ -3,28 +3,71 @@ const path = require('path');
 const tiendaApi = require('./tiendaApi');
 const { normalize } = require('../core/normalize');
 
-// En prod/containers, /tmp suele ser lo más estable.
-// Podés overridear con PRODUCTS_CACHE_PATH
+// --------------------
+// Config cache
+// --------------------
 const cachePath =
   process.env.PRODUCTS_CACHE_PATH || '/tmp/mtb-products-cache.json';
 
 const cacheDir = path.dirname(cachePath);
 
+// --------------------
+// Helpers
+// --------------------
+function pickLang(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' || typeof value === 'number') return value;
+  return value.es || value.pt || value.en || null;
+}
+
+function normalizeProduct(p) {
+  if (!p) return null;
+
+  const name = pickLang(p.name) || p.title || p.product_name || '';
+  const slug = p.slug || '';
+  const description = pickLang(p.description) || '';
+
+  const variants = Array.isArray(p.variants)
+    ? p.variants.map((v) => ({
+        id: v.id ?? null,
+        name: pickLang(v.name) || v.sku || '',
+        price: pickLang(v.price) ?? pickLang(v.promotional_price) ?? null,
+        sku: v.sku || null,
+        raw: v
+      }))
+    : [];
+
+  return {
+    id: p.id ?? p.product_id ?? null,
+    name,
+    slug,
+    description,
+    price:
+      pickLang(p.price) ??
+      pickLang(p.promotional_price) ??
+      variants[0]?.price ??
+      null,
+    promotional_price: pickLang(p.promotional_price) ?? null,
+    url: p.url || p.permalink || p.canonical_url || null,
+    tags: Array.isArray(p.tags) ? p.tags : [],
+    variants,
+    raw: p
+  };
+}
+
+// --------------------
+// Cache I/O
+// --------------------
 function readCache() {
   try {
     const raw = fs.readFileSync(cachePath, 'utf-8');
     const parsed = JSON.parse(raw);
 
-    // compat: si alguna versión guardó generated_at, lo mapeamos a updated_at
-    if (parsed && !parsed.updated_at && parsed.generated_at) {
-      parsed.updated_at = parsed.generated_at;
-    }
-
     return {
       updated_at: parsed?.updated_at || null,
       products: Array.isArray(parsed?.products) ? parsed.products : []
     };
-  } catch (error) {
+  } catch {
     return { updated_at: null, products: [] };
   }
 }
@@ -34,11 +77,18 @@ function writeCache(products) {
     if (!fs.existsSync(cacheDir)) {
       fs.mkdirSync(cacheDir, { recursive: true });
     }
-    const payload = {
-      updated_at: new Date().toISOString(),
-      products: Array.isArray(products) ? products : []
-    };
-    fs.writeFileSync(cachePath, JSON.stringify(payload, null, 2));
+
+    fs.writeFileSync(
+      cachePath,
+      JSON.stringify(
+        {
+          updated_at: new Date().toISOString(),
+          products
+        },
+        null,
+        2
+      )
+    );
   } catch (error) {
     console.error('[cache] write error', error.message);
   }
@@ -51,26 +101,36 @@ function isCacheStale(cache) {
   return ageMs > ttlMin * 60 * 1000;
 }
 
+// --------------------
+// Search
+// --------------------
 function findInCache(cache, query) {
-  const normalizedQuery = normalize(query);
-  if (!normalizedQuery) return null;
+  const q = normalize(query);
+  if (!q) return null;
 
   return (
-    cache.products.find((product) => {
-      const name = normalize(product.name || '');
-      const slug = normalize(product.slug || '');
-      return name.includes(normalizedQuery) || slug.includes(normalizedQuery);
+    cache.products.find((p) => {
+      return (
+        normalize(p.name).includes(q) ||
+        normalize(p.slug).includes(q)
+      );
     }) || null
   );
 }
 
+// --------------------
+// Sync cache
+// --------------------
 async function syncCache() {
   try {
     const products = await tiendaApi.listProducts();
-    const safeProducts = products || [];
-    console.log(`[cache] refreshed n=${safeProducts.length}`);
-    if (safeProducts.length) writeCache(safeProducts);
-    return safeProducts;
+    const normalized = (products || [])
+      .map(normalizeProduct)
+      .filter(Boolean);
+
+    console.log(`[cache] refreshed n=${normalized.length}`);
+    if (normalized.length) writeCache(normalized);
+    return normalized;
   } catch (error) {
     console.error('[cache] sync error', error.message);
     return [];
@@ -85,24 +145,21 @@ async function ensureCache() {
   return syncCache();
 }
 
-/**
- * resolveProduct:
- * 1) intenta resolver "vivo" via tiendaApi.getProduct(query) (ideal para precio/url exacto)
- * 2) si no, busca en cache (name/slug includes)
- * 3) si cache está viejo, refresca y reintenta
- */
+// --------------------
+// Resolve product
+// --------------------
 async function resolveProduct(query) {
   if (!query) return null;
 
   let liveProduct = null;
   try {
-    liveProduct = await tiendaApi.getProduct(query);
-  } catch (error) {
+    const rawLive = await tiendaApi.getProduct(query);
+    liveProduct = normalizeProduct(rawLive);
+  } catch {
     liveProduct = null;
   }
 
-  // si viene bien resuelto, devolvemos directo
-  if (liveProduct && (liveProduct.url || liveProduct.name)) return liveProduct;
+  if (liveProduct?.name) return liveProduct;
 
   const cache = readCache();
   let cachedProduct = findInCache(cache, query);
@@ -112,17 +169,17 @@ async function resolveProduct(query) {
     cachedProduct = findInCache(readCache(), query);
   }
 
-  if (cachedProduct) {
-    return {
-      ...cachedProduct,
-      // si el "live" trajo price, lo priorizamos
-      price: liveProduct?.price ?? cachedProduct.price ?? null,
-      url: liveProduct?.url ?? cachedProduct.url ?? null
-    };
-  }
+  if (!cachedProduct) return liveProduct;
 
-  // último fallback
-  return liveProduct;
+  return {
+    ...cachedProduct,
+    price: liveProduct?.price ?? cachedProduct.price ?? null,
+    url: liveProduct?.url ?? cachedProduct.url ?? null,
+    variants:
+      liveProduct?.variants?.length
+        ? liveProduct.variants
+        : cachedProduct.variants
+  };
 }
 
 module.exports = {
