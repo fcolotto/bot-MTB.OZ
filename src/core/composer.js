@@ -1,3 +1,4 @@
+// src/core/composer.js
 const faqData = require('../data/faq.json');
 const ozoneData = require('../data/ozone.json');
 const { normalize } = require('./normalize');
@@ -43,9 +44,7 @@ function composeOrderResponse(order) {
   }
 
   const items = Array.isArray(order.items)
-    ? order.items
-        .map((item) => item.name || item.title || item.product_name)
-        .filter(Boolean)
+    ? order.items.map((item) => item.name || item.title || item.product_name).filter(Boolean)
     : [];
 
   const itemsText = items.length ? `Productos: ${items.join(', ')}.` : '';
@@ -64,80 +63,99 @@ function composeOrderResponse(order) {
 function composePriceResponse(product, kits = [], kitLinks = []) {
   if (!product) {
     return {
-      text: 'No encontré ese producto. ¿Me decís el nombre exacto (y si aplica, el tamaño: 50 ml / 195 ml)?',
+      text: 'No encontré ese producto. ¿Podés decirme el nombre exacto?',
       links: [],
       meta: { intent: 'price', status: 'not_found' }
     };
   }
 
-  const name = (product.name || '').trim();
-  const safeName = name || 'ese producto';
-
-  const hasPrice = product.price !== null && product.price !== undefined && product.price !== '';
-  const priceText = hasPrice
-    ? `El precio de ${safeName} es ${formatCurrency(product.price)}.`
-    : `Encontré ${safeName}, pero ahora mismo no me está llegando el precio.`;
-
   const links = [];
-  if (product.url) {
-    links.push({ label: `Ver ${safeName}`, url: product.url });
+  if (product.url) links.push({ label: `Ver ${product.name || 'ese producto'}`, url: product.url });
+
+  if (product.price == null) {
+    return {
+      text: `Encontré ${product.name || ''}, pero no me está llegando el precio ahora mismo. ¿Me decís qué tamaño/variante querés (por ejemplo 50 ml o 195 ml) así lo busco exacto?`.trim(),
+      links,
+      meta: { intent: 'price', status: 'missing_price', product_id: product.id || null }
+    };
   }
 
-  if (kits.length) {
-    const kitNames = kits.map((k) => k.kit_name).filter(Boolean);
-    const kitText = kitNames.length
-      ? `También puede venir en estos kits: ${kitNames.join(', ')}.`
-      : '';
+  const priceText = `El precio de ${product.name || 'ese producto'} es ${formatCurrency(product.price)}.`;
 
+  if (kits.length) {
+    const kitText =
+      'También podés encontrarlo en estos kits: ' + kits.map((k) => k.kit_name).join(', ') + '.';
     return {
       text: `${priceText} ${kitText}`.trim(),
       links: [...links, ...(kitLinks || [])],
-      meta: {
-        intent: 'price',
-        status: hasPrice ? 'ok' : 'missing_price',
-        product_id: product.id || null
-      }
+      meta: { intent: 'price', status: 'ok', product_id: product.id || null }
     };
   }
 
   return {
     text: priceText,
     links,
-    meta: {
-      intent: 'price',
-      status: hasPrice ? 'ok' : 'missing_price',
-      product_id: product.id || null
-    }
+    meta: { intent: 'price', status: 'ok', product_id: product.id || null }
+  };
+}
+
+function composeInfoResponse(product) {
+  if (!product) {
+    return {
+      text: 'Dale. ¿Me decís el nombre exacto del producto (y si sabés el tamaño/variante)?',
+      links: [],
+      meta: { intent: 'info', status: 'needs_product' }
+    };
+  }
+
+  const links = [];
+  if (product.url) links.push({ label: `Ver ${product.name || 'producto'}`, url: product.url });
+
+  // Ojo: tu cache puede o no traer description. Si no trae, no inventamos.
+  const description = product.description || product.raw?.description || null;
+
+  if (description) {
+    // cortito y usable (WhatsApp)
+    const clean = String(description).replace(/\s+/g, ' ').trim();
+    const short = clean.length > 420 ? clean.slice(0, 420).trim() + '…' : clean;
+
+    return {
+      text: `Sobre ${product.name}: ${short}`,
+      links,
+      meta: { intent: 'info', status: 'ok', product_id: product.id || null }
+    };
+  }
+
+  return {
+    text: `Encontré ${product.name}, pero no tengo la ficha de información cargada acá todavía. ¿Querés que te pase el link o preferís que te derive con un asesor?`,
+    links,
+    meta: { intent: 'info', status: 'missing_info', product_id: product.id || null }
   };
 }
 
 function composeFaqResponse(product, ozoneLink) {
   if (!product) {
     return {
-      text: faqData.needs_product_prompt || '¿De qué producto querés info?',
+      text: faqData.needs_product_prompt || '¿De qué producto querés saberlo?',
       links: [],
       meta: { intent: 'faq', status: 'needs_product' }
     };
   }
 
-  const name = (product.name || '').trim();
-  const safeName = name || 'ese producto';
-
   const spfInfo = extractSpfInfo(product);
 
   if (spfInfo === true) {
     return {
-      text: `Sí, ${safeName} tiene protección solar. ${faqData.spf_usage_tip || ''}`.trim(),
-      links: product.url ? [{ label: `Ver ${safeName}`, url: product.url }] : [],
+      text: `Sí, ${product.name} tiene protección solar. ${faqData.spf_usage_tip || ''}`.trim(),
+      links: product.url ? [{ label: `Ver ${product.name}`, url: product.url }] : [],
       meta: { intent: 'faq', product_id: product.id || null, spf: true }
     };
   }
 
   if (spfInfo === false) {
     const links = [];
-    if (ozoneLink?.url) {
-      links.push({ label: ozoneLink.label || ozoneData.label || 'Ver Ozone', url: ozoneLink.url });
-    }
+    if (ozoneLink?.url) links.push({ label: ozoneLink.label || ozoneData.label, url: ozoneLink.url });
+
     return {
       text: `Este producto no tiene protección solar. ${ozoneData.copy || ''}`.trim(),
       links,
@@ -146,8 +164,8 @@ function composeFaqResponse(product, ozoneLink) {
   }
 
   return {
-    text: `No tengo información confirmada sobre protección solar para ${safeName}. ¿Querés que lo revise un asesor?`,
-    links: product.url ? [{ label: `Ver ${safeName}`, url: product.url }] : [],
+    text: 'No tengo información confirmada sobre protección solar para este producto. ¿Querés que lo revise un asesor?',
+    links: [],
     meta: { intent: 'faq', product_id: product.id || null, spf: 'unknown' }
   };
 }
@@ -163,6 +181,7 @@ function composeErrorResponse() {
 module.exports = {
   composeOrderResponse,
   composePriceResponse,
+  composeInfoResponse,
   composeFaqResponse,
   composeErrorResponse
 };
