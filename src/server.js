@@ -27,6 +27,8 @@ app.use((err, req, res, next) => {
 
 const port = process.env.PORT || 3000;
 
+app.get('/health', (req, res) => res.json({ ok: true }));
+
 if (require.main === module) {
   app.listen(port, '0.0.0.0', () => {
     console.log(`[server] running on port ${port}`);
