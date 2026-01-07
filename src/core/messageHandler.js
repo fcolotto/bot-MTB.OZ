@@ -4,6 +4,9 @@ const { suggestKits } = require('./kitSuggester');
 const {
   composeOrderResponse,
   composePriceResponse,
+  composePaymentsResponse,
+  composeShippingResponse,
+  composePromosResponse,
   composeInfoResponse,
   composeFaqResponse,
   composeErrorResponse
@@ -18,50 +21,14 @@ const ozoneData = require('../data/ozone.json');
 const { normalize } = require('./normalize');
 
 function extractProductQuery(text, keywords) {
-  let result = normalize(text);
+  const normalized = normalize(text);
+  let result = normalized;
 
-  // 1) remover keywords explícitas
   (keywords || []).forEach((keyword) => {
     result = result.replace(normalize(keyword), ' ');
   });
 
-  // 2) remover frases típicas de conversación (sin romper variantes ml)
-  const stopPhrases = [
-    'hola',
-    'buenas',
-    'buenos dias',
-    'buenas tardes',
-    'buenas noches',
-    'quiero saber',
-    'quisiera saber',
-    'me decis',
-    'me dices',
-    'por favor',
-    'necesito',
-    'consulta',
-    'info',
-    'informacion',
-    'información',
-    'precio',
-    'cuesta',
-    'vale',
-    'valor',
-    'cuanto',
-    'cuánto',
-    'el',
-    'la',
-    'de',
-    'del'
-  ];
-
-  stopPhrases.forEach((p) => {
-    result = result.replace(new RegExp(`\\b${normalize(p)}\\b`, 'g'), ' ');
-  });
-
-  // 3) normalizar espacios
-  result = result.replace(/\s+/g, ' ').trim();
-
-  return result;
+  return result.replace(/\s+/g, ' ').trim();
 }
 
 async function resolveKitLinks(kits) {
@@ -71,26 +38,33 @@ async function resolveKitLinks(kits) {
   for (const kit of kits || []) {
     const resolved = await productResolver.resolveProduct(kit.kit_name);
 
-    if (resolved?.url) links.push({ label: kit.kit_name, url: resolved.url });
-    else if (fallbackUrl) links.push({ label: kit.kit_name, url: fallbackUrl });
+    if (resolved?.url) {
+      links.push({ label: kit.kit_name, url: resolved.url });
+    } else if (fallbackUrl) {
+      links.push({ label: kit.kit_name, url: fallbackUrl });
+    }
   }
 
   return links;
 }
 
-// Reescribe draftBody.text con LLM si está habilitado.
-// Mantiene links y meta intactos. Si falla, no rompe la respuesta.
 async function maybeRewriteText({ userText, draftBody }) {
   const useLLM = process.env.USE_LLM_REWRITE !== 'false'; // default ON
   if (!useLLM) return draftBody;
-
   if (!process.env.OPENAI_API_KEY) return draftBody;
 
   const systemPrompt = process.env.ASSISTANT_SYSTEM_PROMPT || '';
 
   try {
-    const newText = await rewrite({ systemPrompt, userText, draft: draftBody });
-    if (newText) draftBody.text = newText;
+    const newText = await rewrite({
+      systemPrompt,
+      userText,
+      draft: draftBody
+    });
+
+    if (newText) {
+      draftBody.text = newText;
+    }
   } catch (e) {
     console.error('[llm] rewrite error', e.message);
   }
@@ -117,13 +91,23 @@ async function handleMessage(payload) {
   const intentData = detectIntent(text);
 
   try {
-    // ---- GREETING ----
-    if (intentData.intent === 'greeting') {
-      const draftBody = {
-        text: '¡Hola! 😊 ¿Querés saber precio, info de un producto o el estado de un pedido?',
-        links: [],
-        meta: { intent: 'greeting' }
-      };
+    // ---- PROMOS ----
+    if (intentData.intent === 'promos') {
+      const draftBody = composePromosResponse();
+      await maybeRewriteText({ userText: text, draftBody });
+      return { status: 200, body: draftBody };
+    }
+
+    // ---- PAYMENTS ----
+    if (intentData.intent === 'payments') {
+      const draftBody = composePaymentsResponse();
+      await maybeRewriteText({ userText: text, draftBody });
+      return { status: 200, body: draftBody };
+    }
+
+    // ---- SHIPPING ----
+    if (intentData.intent === 'shipping') {
+      const draftBody = composeShippingResponse();
       await maybeRewriteText({ userText: text, draftBody });
       return { status: 200, body: draftBody };
     }
@@ -138,14 +122,10 @@ async function handleMessage(payload) {
       }
 
       const draftBody = {
-        text:
-          process.env.ORDER_LOOKUP_BY_NAME_EMAIL === 'true'
-            ? 'Puedo buscarlo por nombre y email. ¿Me los compartís, por favor?'
-            : 'Necesito el número de pedido para ayudarte. ¿Lo tenés a mano?',
+        text: 'Necesito el número de pedido para ayudarte. ¿Lo tenés a mano?',
         links: [],
         meta: { intent: 'order', status: 'needs_order_id' }
       };
-
       await maybeRewriteText({ userText: text, draftBody });
       return { status: 200, body: draftBody };
     }
@@ -163,7 +143,6 @@ async function handleMessage(payload) {
       ]);
 
       const product = await productResolver.resolveProduct(productQuery || text);
-
       const kits = suggestKits(product?.name);
       const kitLinks = await resolveKitLinks(kits);
 
@@ -175,34 +154,16 @@ async function handleMessage(payload) {
 
     // ---- INFO ----
     if (intentData.intent === 'info') {
-      const productQuery = extractProductQuery(text, [
-        'para que sirve',
-        'para qué sirve',
-        'sirve para',
-        'beneficios',
-        'beneficio',
-        'modo de uso',
-        'como se usa',
-        'cómo se usa',
-        'ingredientes',
-        'rutina',
-        'que hace',
-        'qué hace',
-        'que es',
-        'qué es'
-      ]);
-
-      const product = productQuery ? await productResolver.resolveProduct(productQuery) : null;
-
+      // intenta resolver producto desde el texto completo (lo simplificamos, anda bien para “para qué sirve X”)
+      const product = await productResolver.resolveProduct(text);
       const draftBody = composeInfoResponse(product);
       await maybeRewriteText({ userText: text, draftBody });
-
       return { status: 200, body: draftBody };
     }
 
-    // ---- FAQ SPF ----
-    if (intentData.intent === 'faq_spf') {
-      const productQuery = extractProductQuery(text, faqData.spf_keywords || []);
+    // ---- FAQ ----
+    if (intentData.intent === 'faq') {
+      const productQuery = extractProductQuery(text, faqData.spf_keywords);
       const product = productQuery ? await productResolver.resolveProduct(productQuery) : null;
       const ozoneProduct = await productResolver.resolveProduct(ozoneData.query);
 

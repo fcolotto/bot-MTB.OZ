@@ -1,120 +1,165 @@
 // src/core/intents.js
 const { normalize } = require('./normalize');
 
-function findOrderId(text) {
-  const t = String(text || '');
-  const m = t.match(/\b(\d{4,10})\b/);
-  return m ? m[1] : null;
-}
-
 function includesAny(hay, keywords) {
   return (keywords || []).some((k) => hay.includes(normalize(k)));
 }
 
-function isGreetingOnly(normalizedText) {
-  const t = normalize(normalizedText);
-  if (!t) return false;
-
-  const greetings = [
-    'hola',
-    'buenas',
-    'buenos dias',
-    'buenas tardes',
-    'buenas noches',
-    'hey',
-    'holi'
-  ];
-
-  // si el mensaje es solo un saludo (o saludo + emoji)
-  const cleaned = t.replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-  return greetings.includes(cleaned);
+function findOrderId(text) {
+  const t = String(text || '');
+  // número de pedido razonable (4-10 dígitos)
+  const m = t.match(/\b(\d{4,10})\b/);
+  return m ? m[1] : null;
 }
 
 function detectIntent(text) {
   const raw = String(text || '');
   const t = normalize(raw);
 
-  // ORDER
+  // -------------------------
+  // 1) PROMOS / DESCUENTOS
+  // -------------------------
+  const promosKeywords = [
+    'promo',
+    'promos',
+    'promocion',
+    'promoción',
+    'descuento',
+    'descuentos',
+    'oferta',
+    'ofertas',
+    '2x1',
+    'cuotas sin interes',
+    'cuotas sin interés',
+    'sale',
+  ];
+  if (includesAny(t, promosKeywords)) {
+    return { intent: 'promos' };
+  }
+
+  // -------------------------
+  // 2) MEDIOS DE PAGO / TRANSFERENCIA
+  // -------------------------
+  const paymentsKeywords = [
+    'medios de pago',
+    'medio de pago',
+    'pago',
+    'pagos',
+    'tarjeta',
+    'credito',
+    'crédito',
+    'debito',
+    'débito',
+    'cuotas',
+    'transferencia',
+    'cbu',
+    'alias',
+    'rapipago',
+    'pago facil',
+    'pagofacil',
+    'pago fácil',
+  ];
+  if (includesAny(t, paymentsKeywords)) {
+    // si menciona transferencia, sigue siendo payments (la respuesta incluye 10% off)
+    return { intent: 'payments' };
+  }
+
+  // -------------------------
+  // 3) ENVIOS (shipping)
+  // -------------------------
+  const shippingKeywords = [
+    'envio',
+    'envíos',
+    'envio a domicilio',
+    'envian',
+    'envían',
+    'envio al interior',
+    'envio a',
+    'enviar',
+    'envian a',
+    'correo',
+    'oca',
+    'andreani',
+    'costo de envio',
+    'costo envío',
+    'cuanto sale el envio',
+    'cuánto sale el envío',
+    'codigo postal',
+    'código postal',
+    'cp',
+  ];
+  if (includesAny(t, shippingKeywords)) {
+    return { intent: 'shipping' };
+  }
+
+  // -------------------------
+  // 4) PEDIDOS / SEGUIMIENTO (order)
+  //  OJO: NO incluir "envío" acá, porque confunde shipping con tracking.
+  // -------------------------
   const orderKeywords = [
     'pedido',
+    'pedidos',
     'orden',
-    'estado',
     'seguimiento',
     'tracking',
-    'envio',
-    'envío',
-    'donde esta',
-    'dónde está',
-    'cuando llega',
-    'cuándo llega',
+    'trackeo',
+    'estado de mi pedido',
     'numero de pedido',
-    'número de pedido'
+    'número de pedido',
+    'id de pedido',
+    'id pedido',
+    'donde esta mi pedido',
+    'dónde está mi pedido',
+    'cuando llega mi pedido',
+    'cuándo llega mi pedido',
+    'guia',
+    'guía',
+    'numero de seguimiento',
+    'número de seguimiento',
   ];
 
-  const orderId = findOrderId(raw);
-  const isOrder = Boolean(orderId) || includesAny(t, orderKeywords);
-
-  if (isOrder) {
-    return {
-      intent: 'order',
-      orderId: orderId || null,
-      noOrderNumber: !orderId
-    };
+  if (includesAny(t, orderKeywords)) {
+    const orderId = findOrderId(raw);
+    if (orderId) return { intent: 'order', orderId };
+    return { intent: 'order', noOrderNumber: true };
   }
 
-  // GREETING (solo saludo)
-  if (isGreetingOnly(t)) {
-    return { intent: 'greeting' };
-  }
-
-  // PRICE
-  const priceKeywords = ['precio', 'cuesta', 'vale', 'valor', 'cuanto', 'cuánto', 'coste'];
+  // -------------------------
+  // 5) PRECIO (price)
+  // -------------------------
+  const priceKeywords = ['precio', 'cuanto cuesta', 'cuánto cuesta', 'vale', 'valor', 'coste'];
   if (includesAny(t, priceKeywords)) {
     return { intent: 'price' };
   }
 
-  // FAQ SPF (más específico: va antes que info)
-  const spfKeywords = [
-    'spf',
-    'proteccion solar',
-    'protección solar',
-    'protector solar',
-    'tiene spf',
-    'tiene filtro',
-    'tiene proteccion',
-    'tiene protección'
-  ];
-  if (includesAny(t, spfKeywords)) {
-    return { intent: 'faq_spf' };
-  }
-
-  // INFO (uso/beneficios/ingredientes)
+  // -------------------------
+  // 6) INFO PRODUCTO (info)
+  // -------------------------
   const infoKeywords = [
     'para que sirve',
     'para qué sirve',
-    'sirve para',
-    'beneficios',
-    'beneficio',
-    'funciona para',
-    'que hace',
-    'qué hace',
-    'que es',
-    'qué es',
     'como se usa',
     'cómo se usa',
     'modo de uso',
-    'como usar',
-    'cómo usar',
     'ingredientes',
-    'ingrediente',
+    'beneficios',
+    'que hace',
+    'qué hace',
+    'es para',
     'rutina',
-    'se aplica',
-    'se usa',
-    'uso recomendado'
+    'como aplicar',
+    'cómo aplicar',
   ];
-
   if (includesAny(t, infoKeywords)) {
     return { intent: 'info' };
+  }
+
+  // -------------------------
+  // 7) FAQ SPF
+  // -------------------------
+  const spfKeywords = ['spf', 'proteccion solar', 'protección solar', 'protector solar', 'tiene spf'];
+  if (includesAny(t, spfKeywords)) {
+    return { intent: 'faq' };
   }
 
   return { intent: 'unknown' };

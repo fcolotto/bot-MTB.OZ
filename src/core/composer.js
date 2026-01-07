@@ -3,6 +3,8 @@ const faqData = require('../data/faq.json');
 const ozoneData = require('../data/ozone.json');
 const { normalize } = require('./normalize');
 
+const STORE_BASE_URL = process.env.STORE_BASE_URL || 'https://www.mariatboticario.shop';
+
 function decodeHtmlEntities(str) {
   return String(str || '')
     .replace(/&nbsp;/g, ' ')
@@ -45,11 +47,6 @@ function truncate(text, max = 520) {
   return t.slice(0, max - 1).trim() + '…';
 }
 
-/**
- * Parse numérico robusto:
- * - Soporta "3.559.500" (miles con puntos)
- * - Soporta "35,595" / "35595" (si viniera con coma)
- */
 function toNumberLoose(value) {
   if (value === null || value === undefined) return NaN;
   if (typeof value === 'number') return value;
@@ -57,25 +54,11 @@ function toNumberLoose(value) {
   const s = String(value).trim();
   if (!s) return NaN;
 
-  // Caso AR: miles con puntos -> los sacamos
-  // Caso coma decimal -> la pasamos a punto
-  const normalized = s
-    .replace(/\./g, '')     // "3.559.500" -> "3559500"
-    .replace(/,/g, '.');    // "35595,50" -> "35595.50"
-
+  const normalized = s.replace(/\./g, '').replace(/,/g, '.');
   const n = Number(normalized);
   return Number.isNaN(n) ? NaN : n;
 }
 
-/**
- * Normaliza montos ARS:
- * - PRICE_IS_CENTS=true => divide por 100 siempre
- * - Si es "muy grande" para un precio típico de tu tienda => asumimos centavos y dividimos por 100
- *
- * Umbral elegido: 500.000 ARS.
- * En cosmética, un precio real arriba de 500k es rarísimo; si algún día vendés un kit carísimo,
- * podés subir/bajar el umbral con PRICE_CENTS_THRESHOLD.
- */
 function normalizeArsAmount(value) {
   if (value === null || value === undefined) return null;
 
@@ -86,8 +69,6 @@ function normalizeArsAmount(value) {
   if (forceCents) return n / 100;
 
   const threshold = Number(process.env.PRICE_CENTS_THRESHOLD || 500000);
-
-  // Si parece un precio “demasiado grande”, casi seguro son centavos
   if (n >= threshold) return n / 100;
 
   return n;
@@ -150,14 +131,6 @@ function composeOrderResponse(order) {
   };
 }
 
-function buildExtrasLinks() {
-  const extras = [];
-  if (process.env.PROMOS_URL) extras.push({ label: 'Ver promos', url: process.env.PROMOS_URL });
-  if (process.env.MEDIOS_PAGO_URL) extras.push({ label: 'Medios de pago', url: process.env.MEDIOS_PAGO_URL });
-  if (process.env.ENVIOS_URL) extras.push({ label: 'Calcular envío', url: process.env.ENVIOS_URL });
-  return extras;
-}
-
 function composePriceResponse(product, kits = [], kitLinks = []) {
   if (!product) {
     return {
@@ -169,38 +142,64 @@ function composePriceResponse(product, kits = [], kitLinks = []) {
 
   const name = product.name || 'ese producto';
 
-  // ✅ Normalización fuerte acá (por si viniera en formato raro)
-  const normalizedPrice = product.price != null ? normalizeArsAmount(product.price) : null;
-  const priceTextValue = normalizedPrice != null ? formatCurrency(normalizedPrice) : null;
+  const priceNumber = product.price != null ? normalizeArsAmount(product.price) : null;
+  const priceText = priceNumber != null ? formatCurrency(priceNumber) : null;
+
+  let transferText = '';
+  if (typeof priceNumber === 'number' && !Number.isNaN(priceNumber)) {
+    const transferPrice = Math.round(priceNumber * 0.9);
+    transferText = ` Pagando por transferencia tenés 10% OFF: ${formatCurrency(transferPrice)}.`;
+  }
+
+  const baseText = priceText
+    ? `El precio de ${name} es ${priceText}.${transferText}`
+    : `Encontré ${name}, pero no me está llegando el precio ahora mismo.`;
 
   const links = [];
   if (product.url) links.push({ label: `Ver ${name}`, url: product.url });
-
-  const extras = buildExtrasLinks();
-
-  const baseText = priceTextValue
-    ? `El precio de ${name} es ${priceTextValue}.`
-    : `Encontré ${name}, pero no me está llegando el precio ahora mismo.`;
-
-  const extraText = extras.length
-    ? ' Si querés, te dejo links de promos/medios de pago/envíos.'
-    : '';
+  else links.push({ label: 'Ver tienda', url: STORE_BASE_URL });
 
   if (kits.length) {
-    const kitText =
-      ' También podés encontrarlo en estos kits: ' + kits.map((k) => k.kit_name).join(', ') + '.';
-
+    const kitText = ' También podés encontrarlo en estos kits: ' + kits.map((k) => k.kit_name).join(', ') + '.';
     return {
-      text: `${baseText}${kitText}${extraText}`.trim(),
-      links: [...links, ...kitLinks, ...extras],
-      meta: { intent: 'price', product_id: product.id || null, status: priceTextValue ? 'ok' : 'missing_price' }
+      text: `${baseText}${kitText}`.trim(),
+      links: [...links, ...kitLinks],
+      meta: { intent: 'price', product_id: product.id || null, status: priceText ? 'ok' : 'missing_price' }
     };
   }
 
   return {
-    text: `${baseText}${extraText}`.trim(),
-    links: [...links, ...extras],
-    meta: { intent: 'price', product_id: product.id || null, status: priceTextValue ? 'ok' : 'missing_price' }
+    text: baseText.trim(),
+    links,
+    meta: { intent: 'price', product_id: product.id || null, status: priceText ? 'ok' : 'missing_price' }
+  };
+}
+
+function composePaymentsResponse() {
+  return {
+    text:
+      'Medios de pago: transferencia, Rapipago, Pago Fácil y tarjeta de débito/crédito. ' +
+      'Con transferencia tenés 10% OFF. Para ver cuotas y detalles actualizados, miralo en la tienda.',
+    links: [{ label: 'Ver tienda', url: STORE_BASE_URL }],
+    meta: { intent: 'payments', status: 'ok' }
+  };
+}
+
+function composeShippingResponse() {
+  return {
+    text:
+      'Hacemos envíos. El costo depende de tu ubicación: podés calcularlo en la tienda ingresando tu código postal al iniciar la compra.',
+    links: [{ label: 'Ver tienda', url: STORE_BASE_URL }],
+    meta: { intent: 'shipping', status: 'ok' }
+  };
+}
+
+function composePromosResponse() {
+  return {
+    text:
+      'Las promos vigentes pueden cambiar según la fecha. Para ver las promociones actuales, revisá la tienda.',
+    links: [{ label: 'Ver tienda', url: STORE_BASE_URL }],
+    meta: { intent: 'promos', status: 'ok' }
   };
 }
 
@@ -220,21 +219,19 @@ function composeInfoResponse(product) {
 
   const links = [];
   if (product.url) links.push({ label: `Ver ${name}`, url: product.url });
-
-  const extras = buildExtrasLinks();
-  const extraText = extras.length ? ' También puedo pasarte promos/medios de pago/envíos.' : '';
+  else links.push({ label: 'Ver tienda', url: STORE_BASE_URL });
 
   if (snippet) {
     return {
-      text: `Info de ${name}:\n${snippet}${extraText}`.trim(),
-      links: [...links, ...extras],
+      text: `Info de ${name}:\n${snippet}`.trim(),
+      links,
       meta: { intent: 'info', status: 'ok', product_id: product.id || null }
     };
   }
 
   return {
     text: `Tengo el link de ${name}. ¿Qué info querés (beneficios, uso, ingredientes)?`,
-    links: [...links, ...extras],
+    links,
     meta: { intent: 'info', status: 'ok', product_id: product.id || null }
   };
 }
@@ -253,7 +250,7 @@ function composeFaqResponse(product, ozoneLink) {
   if (spfInfo === true) {
     return {
       text: `Sí, ${product.name} tiene protección solar. ${faqData.spf_usage_tip}`,
-      links: product.url ? [{ label: `Ver ${product.name}`, url: product.url }] : [],
+      links: product.url ? [{ label: `Ver ${product.name}`, url: product.url }] : [{ label: 'Ver tienda', url: STORE_BASE_URL }],
       meta: { intent: 'faq', product_id: product.id || null, spf: true }
     };
   }
@@ -261,6 +258,8 @@ function composeFaqResponse(product, ozoneLink) {
   if (spfInfo === false) {
     const links = [];
     if (ozoneLink?.url) links.push({ label: ozoneLink.label || ozoneData.label, url: ozoneLink.url });
+    if (!links.length) links.push({ label: 'Ver tienda', url: STORE_BASE_URL });
+
     return {
       text: `Este producto no tiene protección solar. ${ozoneData.copy}`,
       links,
@@ -269,8 +268,8 @@ function composeFaqResponse(product, ozoneLink) {
   }
 
   return {
-    text: `No tengo confirmado si ${product.name} tiene SPF. Si querés, te cuento cómo usarlo o te paso opciones con protección.`,
-    links: [],
+    text: `No tengo confirmado si ${product.name} tiene SPF.`,
+    links: [{ label: 'Ver tienda', url: STORE_BASE_URL }],
     meta: { intent: 'faq', product_id: product.id || null, spf: 'unknown' }
   };
 }
@@ -286,6 +285,9 @@ function composeErrorResponse() {
 module.exports = {
   composeOrderResponse,
   composePriceResponse,
+  composePaymentsResponse,
+  composeShippingResponse,
+  composePromosResponse,
   composeInfoResponse,
   composeFaqResponse,
   composeErrorResponse
