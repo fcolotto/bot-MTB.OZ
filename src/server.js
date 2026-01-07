@@ -29,7 +29,13 @@ app.get('/version', (req, res) => {
 });
 
 // Routes
+// ✅ ESTE es tu webhook final para Meta:
+// https://TU_DOMINIO/webhook/whatsapp   (GET verifica / POST mensajes)
 app.use('/webhook/whatsapp', whatsappRoute);
+
+// (Opcional) alias más corto por comodidad (no hace daño)
+app.use('/whatsapp', whatsappRoute);
+
 app.use('/health', healthRoute);
 app.use('/message', messageRoute);
 app.use('/debug', debugRoute);
@@ -44,22 +50,16 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ✅ IMPORTANTÍSIMO: Railway PORT
-const port = Number(process.env.PORT);
-if (!port) {
-  console.error('❌ PORT no definido por el entorno.');
-  process.exit(1);
-}
+// ✅ Railway PORT (pero con fallback local)
+const port = Number(process.env.PORT || 3000);
 
 const server = app.listen(port, '0.0.0.0', () => {
   console.log(`[server] listening on 0.0.0.0:${port}`);
   console.log('[boot] ready - waiting for requests');
 });
 
-// ✅ Keepalive para evitar que Railway “duerma/mate” el container por inactividad.
-// No depende de librerías externas.
+// ✅ Keepalive (opcional)
 function keepAlive() {
-  // ping local al propio proceso (no sale a internet, no cuesta nada)
   const req = http.request(
     {
       hostname: '127.0.0.1',
@@ -69,7 +69,6 @@ function keepAlive() {
       timeout: 5000
     },
     (res) => {
-      // consumir data para cerrar correctamente
       res.on('data', () => {});
       res.on('end', () => {
         console.log(`[keepalive] /healthz -> ${res.statusCode}`);
@@ -77,30 +76,23 @@ function keepAlive() {
     }
   );
 
-  req.on('timeout', () => {
-    req.destroy(new Error('timeout'));
-  });
-
-  req.on('error', (e) => {
-    console.log('[keepalive] error', e.message);
-  });
-
+  req.on('timeout', () => req.destroy(new Error('timeout')));
+  req.on('error', (e) => console.log('[keepalive] error', e.message));
   req.end();
 }
 
-// En Railway suele venir esta env; si no, igual lo hacemos configurable.
 const enableKeepAlive =
   process.env.ENABLE_KEEPALIVE === 'true' ||
   !!process.env.RAILWAY_ENVIRONMENT ||
   !!process.env.RAILWAY_PROJECT_ID;
 
 if (enableKeepAlive) {
-  const everyMs = Number(process.env.KEEPALIVE_INTERVAL_MS || 60_000); // default 60s
+  const everyMs = Number(process.env.KEEPALIVE_INTERVAL_MS || 60_000);
   console.log(`[keepalive] enabled interval=${everyMs}ms`);
   setInterval(keepAlive, everyMs);
 }
 
-// ✅ Manejar SIGTERM para shutdown prolijo (Railway manda SIGTERM)
+// ✅ SIGTERM shutdown
 process.on('SIGTERM', () => {
   console.log('[server] SIGTERM received, shutting down...');
   server.close(() => {
