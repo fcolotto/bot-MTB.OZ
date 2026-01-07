@@ -8,10 +8,16 @@ const router = express.Router();
  * Memoria corta por usuario
  * =========================
  * - Guarda el último producto detectado por número (wa_id)
- * - TTL para no arrastrar contexto viejo
+ * - TTL configurable por env (minutos)
+ * - Limpieza periódica para que el Map no crezca infinito
  */
 const sessions = new Map();
-const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hora
+
+const SESSION_TTL_MINUTES = Number(process.env.SESSION_TTL_MINUTES || 60); // 30 o 60
+const SESSION_TTL_MS = SESSION_TTL_MINUTES * 60 * 1000;
+
+const SESSION_CLEANUP_MINUTES = Number(process.env.SESSION_CLEANUP_MINUTES || 5);
+const SESSION_CLEANUP_MS = SESSION_CLEANUP_MINUTES * 60 * 1000;
 
 function getSession(userId) {
   const now = Date.now();
@@ -23,9 +29,20 @@ function getSession(userId) {
     return fresh;
   }
 
+  // sliding TTL: cada mensaje renueva updatedAt
   s.updatedAt = now;
   return s;
 }
+
+// Limpieza automática de sesiones expiradas
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, s] of sessions.entries()) {
+    if (!s || now - s.updatedAt > SESSION_TTL_MS) {
+      sessions.delete(userId);
+    }
+  }
+}, SESSION_CLEANUP_MS);
 
 /**
  * =========================
@@ -77,7 +94,8 @@ function detectIntent(text) {
     t.includes('cuanto sale') ||
     t.includes('valor') ||
     t.includes('sale ')
-  ) return 'price';
+  )
+    return 'price';
 
   // link / donde comprar
   if (
@@ -88,7 +106,8 @@ function detectIntent(text) {
     t.includes('comprar') ||
     t.includes('carrito') ||
     t.includes('web')
-  ) return 'link';
+  )
+    return 'link';
 
   // para qué sirve / beneficios / qué hace
   if (
@@ -98,7 +117,8 @@ function detectIntent(text) {
     t.includes('que es') ||
     t.includes('sirve para') ||
     t.includes('funciona para')
-  ) return 'benefits';
+  )
+    return 'benefits';
 
   // modo de uso / como se usa
   if (
@@ -107,15 +127,12 @@ function detectIntent(text) {
     t.includes('como usar') ||
     t.includes('aplicar') ||
     t.includes('rutina')
-  ) return 'how_to_use';
+  )
+    return 'how_to_use';
 
   // estado pedido (muy básico)
-  if (
-    t.includes('pedido') ||
-    t.includes('seguimiento') ||
-    t.includes('envio') ||
-    t.includes('estado')
-  ) return 'order';
+  if (t.includes('pedido') || t.includes('seguimiento') || t.includes('envio') || t.includes('estado'))
+    return 'order';
 
   return 'other';
 }
@@ -171,17 +188,9 @@ async function resolveProductByQuery(query) {
     // Esperamos algo como { ok:true, product:{ name, price, url, ... } } o similar.
     // No conozco tu schema exacto, así que lo hago tolerante:
     const data = resp?.data || {};
-    const product =
-      data.product ||
-      data.data?.product ||
-      data.result?.product ||
-      data;
+    const product = data.product || data.data?.product || data.result?.product || data;
 
-    const name =
-      product?.name ||
-      product?.title ||
-      product?.product?.name ||
-      null;
+    const name = product?.name || product?.title || product?.product?.name || null;
 
     // Si no hay nombre, no lo consideramos válido
     if (!name) return null;
@@ -329,7 +338,7 @@ router.post('/', async (req, res) => {
       intent !== 'order' &&
       !isIntentOnly(incomingText) &&
       normalize(incomingText).length >= 3 &&
-      (now - (session.lastProductAt || 0) > 30 * 1000);
+      now - (session.lastProductAt || 0) > 30 * 1000;
 
     if (shouldTryResolveProduct) {
       const resolved = await resolveProductByQuery(incomingText);
@@ -347,9 +356,7 @@ router.post('/', async (req, res) => {
       text: textForBot
     });
 
-    const replyText =
-      botResp?.data?.text ||
-      'Perdón, tuve un problema. ¿Querés que te derive con un asesor?';
+    const replyText = botResp?.data?.text || 'Perdón, tuve un problema. ¿Querés que te derive con un asesor?';
 
     await sendWhatsAppText(from, replyText);
     console.log('[wa] replied ok');
@@ -361,10 +368,7 @@ router.post('/', async (req, res) => {
       const message = extractWaMessage(req.body || {});
       const from = message?.from;
       if (from) {
-        await sendWhatsAppText(
-          from,
-          'Perdón, tuve un problema técnico. ¿Querés que te derive con un asesor?'
-        );
+        await sendWhatsAppText(from, 'Perdón, tuve un problema técnico. ¿Querés que te derive con un asesor?');
       }
     } catch (e) {
       console.error('[wa] fallback reply error', e.message);
