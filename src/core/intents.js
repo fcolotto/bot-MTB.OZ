@@ -8,8 +8,8 @@ function findOrderId(text) {
   return m ? m[1] : null;
 }
 
-function includesAny(hay, keywords) {
-  return (keywords || []).some((k) => hay.includes(normalize(k)));
+function includesAny(normalizedHaystack, keywords) {
+  return (keywords || []).some((k) => normalizedHaystack.includes(normalize(k)));
 }
 
 function detectIntent(text) {
@@ -18,7 +18,8 @@ function detectIntent(text) {
 
   // ---------------------------
   // 0) ORDER (estado/seguimiento)
-  // OJO: NO usar "envio" acá porque dispara shipping.
+  // IMPORTANTE:
+  // - NO incluir "envio/envíos" acá porque dispara shipping.
   // ---------------------------
   const orderKeywords = [
     'pedido',
@@ -35,13 +36,12 @@ function detectIntent(text) {
     'donde esta mi pedido',
     'dónde está mi pedido',
     'cuando llega mi pedido',
-    'cuándo llega mi pedido'
+    'cuándo llega mi pedido',
+    'me llego mi pedido',
+    'me llegó mi pedido'
   ];
 
   const orderId = findOrderId(raw);
-
-  // Si viene un número de 4+ dígitos SOLO, lo tratamos como order (caso común)
-  // Si viene un número + texto, igual lo tratamos como order.
   const isOrder = Boolean(orderId) || includesAny(t, orderKeywords);
 
   if (isOrder) {
@@ -56,14 +56,12 @@ function detectIntent(text) {
   // 1) PRICE
   // ---------------------------
   const priceKeywords = ['precio', 'cuesta', 'vale', 'valor', 'cuanto', 'cuánto', 'coste'];
-  if (includesAny(t, priceKeywords)) {
-    return { intent: 'price' };
-  }
+  if (includesAny(t, priceKeywords)) return { intent: 'price' };
 
   // ---------------------------
   // 2) PAYMENTS (transferencia/medios de pago)
-  // IMPORTANTE: va ANTES de PROMOS para que
-  // "transferencia + descuento" no caiga en promos.
+  // Va ANTES de PROMOS:
+  // "transferencia + descuento" tiene que caer acá.
   // ---------------------------
   const paymentsKeywords = [
     'medios de pago',
@@ -88,10 +86,20 @@ function detectIntent(text) {
     'débito',
     'cuotas',
     'cuotas sin interes',
-    'cuotas sin interés'
+    'cuotas sin interés',
+    // descuento por transferencia (lo tratamos como payments)
+    'descuento transferencia',
+    '10% transferencia',
+    '10 transferencia'
   ];
 
-  if (includesAny(t, paymentsKeywords)) {
+  // Si la pregunta mezcla "descuento" + "transferencia", es payments.
+  const mentionsDiscount =
+    t.includes('descuento') || t.includes('off') || t.includes('%') || t.includes('promo');
+  const mentionsTransfer =
+    t.includes('transferencia') || t.includes('cbu') || t.includes('alias') || t.includes('transferir');
+
+  if (includesAny(t, paymentsKeywords) || (mentionsDiscount && mentionsTransfer)) {
     return { intent: 'payments' };
   }
 
@@ -118,13 +126,11 @@ function detectIntent(text) {
     'cp'
   ];
 
-  if (includesAny(t, shippingKeywords)) {
-    return { intent: 'shipping' };
-  }
+  if (includesAny(t, shippingKeywords)) return { intent: 'shipping' };
 
   // ---------------------------
   // 4) PROMOS
-  // NOTA: NO incluimos "descuento" acá para no pisar payments.
+  // OJO: NO metemos "descuento" acá para no pisar payments.
   // ---------------------------
   const promosKeywords = [
     'promo',
@@ -140,9 +146,7 @@ function detectIntent(text) {
     'cybermonday'
   ];
 
-  if (includesAny(t, promosKeywords)) {
-    return { intent: 'promos' };
-  }
+  if (includesAny(t, promosKeywords)) return { intent: 'promos' };
 
   // ---------------------------
   // 5) INFO (beneficios / uso / ingredientes)
@@ -168,15 +172,16 @@ function detectIntent(text) {
     'rutina',
     'se aplica',
     'se usa',
-    'uso recomendado'
+    'uso recomendado',
+    'informacion',
+    'información',
+    'info'
   ];
 
-  if (includesAny(t, infoKeywords)) {
-    return { intent: 'info' };
-  }
+  if (includesAny(t, infoKeywords)) return { intent: 'info' };
 
   // ---------------------------
-  // 6) FAQ SPF
+  // 6) FAQ SPF / PROTECCIÓN SOLAR
   // ---------------------------
   const spfKeywords = [
     'spf',
@@ -184,12 +189,12 @@ function detectIntent(text) {
     'protección solar',
     'protector solar',
     'tiene spf',
-    'tiene protección'
+    'tiene protección',
+    'protege del sol',
+    'protege del sol?'
   ];
 
-  if (includesAny(t, spfKeywords)) {
-    return { intent: 'faq' };
-  }
+  if (includesAny(t, spfKeywords)) return { intent: 'faq' };
 
   return { intent: 'unknown' };
 }
