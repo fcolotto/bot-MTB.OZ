@@ -1,52 +1,26 @@
 // src/core/messageHandler.js
 const { detectIntent } = require('./intents');
-const { suggestKits } = require('./kitSuggester');
 const {
   composeOrderResponse,
   composePriceResponse,
   composePaymentsResponse,
+  composeInstallmentsResponse,
   composeShippingResponse,
   composePromosResponse,
   composeInfoResponse,
+  composeSunResponse,
+  composeOzoneResponse,
+  composeSunstickResponse,
   composeFaqResponse,
   composeErrorResponse
 } = require('./composer');
 
 const tiendaApi = require('../services/tiendaApi');
 const productResolver = require('../services/productResolver');
-const { rewrite } = require('../services/llm');
 
 const faqData = require('../data/faq.json');
 const ozoneData = require('../data/ozone.json');
 const { normalize } = require('./normalize');
-
-// Keywords para limpiar query de producto cuando el intent es "info"
-const INFO_KEYWORDS = [
-  'para que sirve',
-  'para qué sirve',
-  'sirve para',
-  'beneficios',
-  'beneficio',
-  'funciona para',
-  'que hace',
-  'qué hace',
-  'que es',
-  'qué es',
-  'como se usa',
-  'cómo se usa',
-  'modo de uso',
-  'como usar',
-  'cómo usar',
-  'ingredientes',
-  'ingrediente',
-  'rutina',
-  'se aplica',
-  'se usa',
-  'uso recomendado',
-  'info',
-  'informacion',
-  'información'
-];
 
 function extractProductQuery(text, keywords) {
   const normalized = normalize(text);
@@ -59,45 +33,19 @@ function extractProductQuery(text, keywords) {
   return result.replace(/\s+/g, ' ').trim();
 }
 
-async function resolveKitLinks(kits) {
-  const links = [];
-  const fallbackUrl = process.env.KITS_COLLECTION_URL;
-
-  for (const kit of kits || []) {
-    const resolved = await productResolver.resolveProduct(kit.kit_name);
-
-    if (resolved?.url) {
-      links.push({ label: kit.kit_name, url: resolved.url });
-    } else if (fallbackUrl) {
-      links.push({ label: kit.kit_name, url: fallbackUrl });
-    }
-  }
-
-  return links;
+function looksLikePielIluminada(text) {
+  const t = normalize(text);
+  return t.includes('piel iluminada');
 }
 
-async function maybeRewriteText({ userText, draftBody }) {
-  const useLLM = process.env.USE_LLM_REWRITE !== 'false'; // default ON
-  if (!useLLM) return draftBody;
-  if (!process.env.OPENAI_API_KEY) return draftBody;
+function wantsPocketOr50(text) {
+  const t = normalize(text);
+  return t.includes('pocket') || t.includes('50 ml') || t.includes('50ml') || t.match(/\b50\b/);
+}
 
-  const systemPrompt = process.env.ASSISTANT_SYSTEM_PROMPT || '';
-
-  try {
-    const newText = await rewrite({
-      systemPrompt,
-      userText,
-      draft: draftBody
-    });
-
-    if (newText) {
-      draftBody.text = newText;
-    }
-  } catch (e) {
-    console.error('[llm] rewrite error', e.message);
-  }
-
-  return draftBody;
+function wantsCorporalOr195(text) {
+  const t = normalize(text);
+  return t.includes('corporal') || t.includes('195 ml') || t.includes('195ml') || t.match(/\b195\b/);
 }
 
 async function handleMessage(payload) {
@@ -121,109 +69,120 @@ async function handleMessage(payload) {
   try {
     // ---- PROMOS ----
     if (intentData.intent === 'promos') {
-      const draftBody = composePromosResponse();
-      await maybeRewriteText({ userText: text, draftBody });
-      return { status: 200, body: draftBody };
+      return { status: 200, body: composePromosResponse() };
     }
 
     // ---- PAYMENTS ----
     if (intentData.intent === 'payments') {
-      const draftBody = composePaymentsResponse();
-      await maybeRewriteText({ userText: text, draftBody });
-      return { status: 200, body: draftBody };
+      return { status: 200, body: composePaymentsResponse() };
+    }
+
+    // ---- INSTALLMENTS ----
+    if (intentData.intent === 'installments') {
+      return { status: 200, body: composeInstallmentsResponse() };
     }
 
     // ---- SHIPPING ----
     if (intentData.intent === 'shipping') {
-      const draftBody = composeShippingResponse();
-      await maybeRewriteText({ userText: text, draftBody });
-      return { status: 200, body: draftBody };
+      return { status: 200, body: composeShippingResponse() };
     }
 
     // ---- ORDER ----
     if (intentData.intent === 'order') {
       if (intentData.orderId) {
         const order = await tiendaApi.getOrder(intentData.orderId);
-        const draftBody = composeOrderResponse(order);
-        await maybeRewriteText({ userText: text, draftBody });
-        return { status: 200, body: draftBody };
+        return { status: 200, body: composeOrderResponse(order) };
       }
 
-      const draftBody = {
-        text: 'Necesito el número de pedido para ayudarte. ¿Lo tenés a mano?',
-        links: [],
-        meta: { intent: 'order', status: 'needs_order_id' }
+      return {
+        status: 200,
+        body: {
+          text: 'Necesito el número de pedido para ayudarte. ¿Lo tenés a mano?',
+          links: [],
+          meta: { intent: 'order', status: 'needs_order_id' }
+        }
       };
-      await maybeRewriteText({ userText: text, draftBody });
-      return { status: 200, body: draftBody };
+    }
+
+    // ---- SUN / OZONE / SUNSTICK ----
+    if (intentData.intent === 'ozone' || intentData.intent === 'sunstick' || intentData.intent === 'sun') {
+      const ozoneProduct = await productResolver.resolveProduct(ozoneData.query);
+
+      // Si viene “piel iluminada + playa/sol” => NO SPF + Ozone
+      if (intentData.intent === 'sun' && looksLikePielIluminada(text)) {
+        const mtb = await productResolver.resolveProduct('piel iluminada');
+        return { status: 200, body: composeSunResponse({ productName: mtb?.name || 'Piel Iluminada', ozoneLink: ozoneProduct }) };
+      }
+
+      if (intentData.intent === 'sunstick') {
+        return { status: 200, body: composeSunstickResponse({ ozoneLink: ozoneProduct }) };
+      }
+
+      if (intentData.intent === 'ozone') {
+        return { status: 200, body: composeOzoneResponse({ ozoneLink: ozoneProduct }) };
+      }
+
+      // sun genérico (sin producto claro)
+      return { status: 200, body: composeSunResponse({ productName: null, ozoneLink: ozoneProduct }) };
     }
 
     // ---- PRICE ----
     if (intentData.intent === 'price') {
       const productQuery = extractProductQuery(text, [
-        'precio',
-        'cuesta',
-        'vale',
-        'valor',
-        'cuanto',
-        'cuánto',
-        'coste'
+        'precio','cuesta','vale','valor','cuanto','cuánto','coste','costo'
       ]);
 
+      // Caso especial: Piel iluminada (Pocket + Corporal)
+      if (looksLikePielIluminada(text)) {
+        const wantPocket = wantsPocketOr50(text);
+        const wantCorporal = wantsCorporalOr195(text);
+
+        if (wantPocket && !wantCorporal) {
+          const pocket = await productResolver.resolveProduct('piel iluminada pocket');
+          return { status: 200, body: composePriceResponse(pocket) };
+        }
+
+        if (wantCorporal && !wantPocket) {
+          const corporal = await productResolver.resolveProduct('piel iluminada corporal');
+          return { status: 200, body: composePriceResponse(corporal) };
+        }
+
+        // si no especifica => devolvemos ambos
+        const pocket = await productResolver.resolveProduct('piel iluminada pocket');
+        const corporal = await productResolver.resolveProduct('piel iluminada corporal');
+        const list = [pocket, corporal].filter(Boolean);
+        return { status: 200, body: composePriceResponse(list) };
+      }
+
       const product = await productResolver.resolveProduct(productQuery || text);
-      const kits = suggestKits(product?.name);
-      const kitLinks = await resolveKitLinks(kits);
-
-      const draftBody = composePriceResponse(product, kits, kitLinks);
-      await maybeRewriteText({ userText: text, draftBody });
-
-      return { status: 200, body: draftBody };
+      return { status: 200, body: composePriceResponse(product) };
     }
 
     // ---- INFO ----
     if (intentData.intent === 'info') {
-      // Limpia el texto para extraer mejor el producto
-      const productQuery = extractProductQuery(text, INFO_KEYWORDS);
-
-      // si la query limpia quedó muy corta, probamos igual con el texto original
-      const queryToUse = productQuery && productQuery.length >= 3 ? productQuery : text;
-
-      const product = await productResolver.resolveProduct(queryToUse);
-      const draftBody = composeInfoResponse(product);
-
-      await maybeRewriteText({ userText: text, draftBody });
-      return { status: 200, body: draftBody };
+      // si pregunta “para qué sirve X”, intentamos resolver X
+      const product = await productResolver.resolveProduct(text);
+      return { status: 200, body: composeInfoResponse(product) };
     }
 
-    // ---- FAQ (SPF) ----
+    // ---- FAQ (tipo “X tiene SPF?”) ----
     if (intentData.intent === 'faq') {
-      const spfKeywords = faqData?.spf_keywords || [
-        'spf',
-        'proteccion solar',
-        'protección solar',
-        'protector solar',
-        'tiene spf'
-      ];
-
-      const productQuery = extractProductQuery(text, spfKeywords);
+      const productQuery = extractProductQuery(text, faqData.spf_keywords);
       const product = productQuery ? await productResolver.resolveProduct(productQuery) : null;
       const ozoneProduct = await productResolver.resolveProduct(ozoneData.query);
 
-      const draftBody = composeFaqResponse(product, ozoneProduct);
-      await maybeRewriteText({ userText: text, draftBody });
-
-      return { status: 200, body: draftBody };
+      return { status: 200, body: composeFaqResponse(product, ozoneProduct) };
     }
 
     // ---- UNKNOWN ----
-    const draftBody = {
-      text: '¿Querés saber precio, estado de pedido o información de un producto? Decime qué necesitás 🙂',
-      links: [],
-      meta: { intent: 'unknown' }
+    return {
+      status: 200,
+      body: {
+        text: '¿Querés saber precio, envíos, medios de pago o info de un producto? Decime qué necesitás 🙂',
+        links: [{ label: 'Ver tienda', url: 'https://www.mariatboticario.shop' }],
+        meta: { intent: 'unknown' }
+      }
     };
-
-    await maybeRewriteText({ userText: text, draftBody });
-    return { status: 200, body: draftBody };
   } catch (error) {
     console.error('[message] error', error.message);
     return { status: 500, body: composeErrorResponse() };

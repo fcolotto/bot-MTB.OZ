@@ -3,8 +3,6 @@ const faqData = require('../data/faq.json');
 const ozoneData = require('../data/ozone.json');
 const { normalize } = require('./normalize');
 
-const STORE_BASE_URL = process.env.STORE_BASE_URL || 'https://www.mariatboticario.shop';
-
 function decodeHtmlEntities(str) {
   return String(str || '')
     .replace(/&nbsp;/g, ' ')
@@ -14,11 +12,7 @@ function decodeHtmlEntities(str) {
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&#(\d+);/g, (_, code) => {
-      try {
-        return String.fromCharCode(Number(code));
-      } catch {
-        return _;
-      }
+      try { return String.fromCharCode(Number(code)); } catch { return _; }
     });
 }
 
@@ -26,57 +20,20 @@ function stripHtml(html) {
   const text = String(html || '')
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/p>/gi, '\n')
-    .replace(/<\/h\d>/gi, '\n')
-    .replace(/<\/li>/gi, '\n')
-    .replace(/<li>/gi, '• ')
     .replace(/<[^>]*>/g, ' ');
-
-  const decoded = decodeHtmlEntities(text);
-
-  return decoded
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n[ \t]+/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-function truncate(text, max = 520) {
-  const t = String(text || '').trim();
-  if (!t) return '';
-  if (t.length <= max) return t;
-  return t.slice(0, max - 1).trim() + '…';
-}
-
-function toNumberLoose(value) {
-  if (value === null || value === undefined) return NaN;
-  if (typeof value === 'number') return value;
-
-  const s = String(value).trim();
-  if (!s) return NaN;
-
-  const normalized = s.replace(/\./g, '').replace(/,/g, '.');
-  const n = Number(normalized);
-  return Number.isNaN(n) ? NaN : n;
+  return decodeHtmlEntities(text).replace(/\s+/g, ' ').trim();
 }
 
 function normalizeArsAmount(value) {
-  if (value === null || value === undefined) return null;
-
-  const n = toNumberLoose(value);
+  const n = Number(value);
   if (Number.isNaN(n)) return value;
-
-  const forceCents = String(process.env.PRICE_IS_CENTS || '').toLowerCase() === 'true';
-  if (forceCents) return n / 100;
-
-  const threshold = Number(process.env.PRICE_CENTS_THRESHOLD || 500000);
-  if (n >= threshold) return n / 100;
-
+  if (n >= 1000000 && n % 100 === 0) return n / 100;
   return n;
 }
 
 function formatCurrency(value) {
+  if (value === null || value === undefined) return null;
   const normalized = normalizeArsAmount(value);
-  if (normalized === null || normalized === undefined) return null;
   if (typeof normalized !== 'number' || Number.isNaN(normalized)) return value;
 
   return new Intl.NumberFormat('es-AR', {
@@ -86,23 +43,10 @@ function formatCurrency(value) {
   }).format(normalized);
 }
 
-function extractSpfInfo(product) {
-  if (!product) return null;
-  if (product.raw?.spf === true || product.raw?.has_spf === true) return true;
-  if (product.raw?.spf === false || product.raw?.has_spf === false) return false;
-
-  const haystack = [product.name, product.description, ...(product.tags || [])]
-    .filter(Boolean)
-    .map((item) => normalize(item))
-    .join(' ');
-
-  if (!haystack) return null;
-
-  const hasSpf = faqData.spf_positive_keywords.some((keyword) =>
-    haystack.includes(normalize(keyword))
-  );
-
-  return hasSpf ? true : null;
+function tenOff(price) {
+  const n = Number(normalizeArsAmount(price));
+  if (Number.isNaN(n)) return null;
+  return Math.round(n * 0.9);
 }
 
 function composeOrderResponse(order) {
@@ -131,8 +75,9 @@ function composeOrderResponse(order) {
   };
 }
 
+// Soporta: product = objeto OR array de objetos (para mostrar pocket + corporal)
 function composePriceResponse(product, kits = [], kitLinks = []) {
-  if (!product) {
+  if (!product || (Array.isArray(product) && product.length === 0)) {
     return {
       text: 'No encontré ese producto. ¿Podés decirme el nombre exacto (y si es posible el tamaño/variante)?',
       links: [],
@@ -140,73 +85,41 @@ function composePriceResponse(product, kits = [], kitLinks = []) {
     };
   }
 
-  const name = product.name || 'ese producto';
+  const products = Array.isArray(product) ? product : [product];
 
-  const priceNumber = product.price != null ? normalizeArsAmount(product.price) : null;
-  const priceText = priceNumber != null ? formatCurrency(priceNumber) : null;
-
-  let transferText = '';
-  if (typeof priceNumber === 'number' && !Number.isNaN(priceNumber)) {
-    const transferPrice = Math.round(priceNumber * 0.9);
-    transferText = ` Pagando por transferencia tenés 10% OFF: ${formatCurrency(transferPrice)}.`;
-  }
-
-  const baseText = priceText
-    ? `El precio de ${name} es ${priceText}.${transferText}`
-    : `Encontré ${name}, pero no me está llegando el precio ahora mismo.`;
-
+  const lines = [];
   const links = [];
-  if (product.url) links.push({ label: `Ver ${name}`, url: product.url });
-  else links.push({ label: 'Ver tienda', url: STORE_BASE_URL });
 
-  if (kits.length) {
-    const kitText = ' También podés encontrarlo en estos kits: ' + kits.map((k) => k.kit_name).join(', ') + '.';
-    return {
-      text: `${baseText}${kitText}`.trim(),
-      links: [...links, ...kitLinks],
-      meta: { intent: 'price', product_id: product.id || null, status: priceText ? 'ok' : 'missing_price' }
-    };
+  for (const p of products) {
+    const name = p?.name || 'ese producto';
+    const price = p?.price != null ? formatCurrency(p.price) : null;
+
+    if (p?.url) links.push({ label: `Ver ${name}`, url: p.url });
+
+    if (price) {
+      const tf = tenOff(p.price);
+      const tfText = tf ? ` Pagando por transferencia tenés 10% OFF: ${formatCurrency(tf)}.` : '';
+      lines.push(`• ${name}: ${price}.${tfText}`);
+    } else {
+      lines.push(`• ${name}: no me está llegando el precio ahora mismo.`);
+    }
   }
 
   return {
-    text: baseText.trim(),
+    text: lines.join('\n'),
     links,
-    meta: { intent: 'price', product_id: product.id || null, status: priceText ? 'ok' : 'missing_price' }
-  };
-}
-
-function composePaymentsResponse() {
-  return {
-    text:
-      'Medios de pago: transferencia, Rapipago, Pago Fácil y tarjeta de débito/crédito. ' +
-      'Con transferencia tenés 10% OFF. Para ver cuotas y detalles actualizados, miralo en la tienda.',
-    links: [{ label: 'Ver tienda', url: STORE_BASE_URL }],
-    meta: { intent: 'payments', status: 'ok' }
-  };
-}
-
-function composeShippingResponse() {
-  return {
-    text:
-      'Hacemos envíos. El costo depende de tu ubicación: podés calcularlo en la tienda ingresando tu código postal al iniciar la compra.',
-    links: [{ label: 'Ver tienda', url: STORE_BASE_URL }],
-    meta: { intent: 'shipping', status: 'ok' }
-  };
-}
-
-function composePromosResponse() {
-  return {
-    text:
-      'Las promos vigentes pueden cambiar según la fecha. Para ver las promociones actuales, revisá la tienda.',
-    links: [{ label: 'Ver tienda', url: STORE_BASE_URL }],
-    meta: { intent: 'promos', status: 'ok' }
+    meta: {
+      intent: 'price',
+      status: products.every(p => p?.price != null) ? 'ok' : 'missing_price',
+      product_id: products[0]?.id || null
+    }
   };
 }
 
 function composeInfoResponse(product) {
   if (!product) {
     return {
-      text: '¿De qué producto querés info? Decime el nombre y (si aplica) el tamaño/variante.',
+      text: '¿De qué producto querés info? Decime el nombre y (si aplica) el tamaño/variante 🙂',
       links: [],
       meta: { intent: 'info', status: 'needs_product' }
     };
@@ -215,62 +128,103 @@ function composeInfoResponse(product) {
   const name = product.name || 'ese producto';
   const raw = product.description || product.raw?.description || '';
   const clean = stripHtml(raw);
-  const snippet = truncate(clean, 520);
+  const snippet = clean ? (clean.length > 420 ? clean.slice(0, 420).trim() + '…' : clean) : null;
 
   const links = [];
   if (product.url) links.push({ label: `Ver ${name}`, url: product.url });
-  else links.push({ label: 'Ver tienda', url: STORE_BASE_URL });
-
-  if (snippet) {
-    return {
-      text: `Info de ${name}:\n${snippet}`.trim(),
-      links,
-      meta: { intent: 'info', status: 'ok', product_id: product.id || null }
-    };
-  }
 
   return {
-    text: `Tengo el link de ${name}. ¿Qué info querés (beneficios, uso, ingredientes)?`,
+    text: snippet
+      ? `Sobre ${name}: ${snippet}`
+      : `Tengo el link de ${name}. ¿Qué info querés (beneficios, uso, ingredientes)?`,
     links,
     meta: { intent: 'info', status: 'ok', product_id: product.id || null }
   };
 }
 
+/**
+ * Regla de negocio:
+ * - Productos María T: NO tienen SPF
+ * - Protección solar => Ozone Lifestyle
+ */
+function composeSunResponse({ productName, ozoneLink }) {
+  const name = productName || 'este producto';
+
+  const links = [{ label: 'Ver tienda', url: 'https://www.mariatboticario.shop' }];
+  if (ozoneLink?.url) links.unshift({ label: ozoneLink.label || 'Ver Ozone Lifestyle', url: ozoneLink.url });
+
+  return {
+    text: `${name} no tiene protección solar. Si buscás protección, eso lo tenemos en Ozone Lifestyle (protectores solares en formato sunstick). Podés verlos en la tienda y en los videos se ve cómo queda aplicado.`,
+    links,
+    meta: { intent: 'sun', status: 'ok' }
+  };
+}
+
+function composeOzoneResponse({ ozoneLink }) {
+  const links = [{ label: 'Ver tienda', url: 'https://www.mariatboticario.shop' }];
+  if (ozoneLink?.url) links.unshift({ label: ozoneLink.label || 'Ver Ozone Lifestyle', url: ozoneLink.url });
+
+  return {
+    text: `Sí: los protectores solares de Ozone Lifestyle están pensados con enfoque sustentable (formato sunstick, práctico para reaplicar). Para ver variantes, tonos y videos de aplicación, revisá la tienda.`,
+    links,
+    meta: { intent: 'ozone', status: 'ok' }
+  };
+}
+
+function composeSunstickResponse({ ozoneLink }) {
+  const links = [{ label: 'Ver tienda', url: 'https://www.mariatboticario.shop' }];
+  if (ozoneLink?.url) links.unshift({ label: ozoneLink.label || 'Ver Sunstick', url: ozoneLink.url });
+
+  return {
+    text: `Sí, cada color deja un rastro del tono (blanco/blanco, verde/verde, marrón/marrón, etc.). La mejor forma de verlo es con los videos de aplicación en la tienda.`,
+    links,
+    meta: { intent: 'sunstick', status: 'ok' }
+  };
+}
+
 function composeFaqResponse(product, ozoneLink) {
+  // Esta función queda para preguntas SPF directas tipo “X tiene SPF?”
+  // Pero ya no devolvemos "unknown": si es producto María T => NO.
   if (!product) {
     return {
-      text: faqData.needs_product_prompt,
+      text: '¿De qué producto querés saber si tiene protección solar?',
       links: [],
       meta: { intent: 'faq', status: 'needs_product' }
     };
   }
 
-  const spfInfo = extractSpfInfo(product);
+  return composeSunResponse({ productName: product.name, ozoneLink });
+}
 
-  if (spfInfo === true) {
-    return {
-      text: `Sí, ${product.name} tiene protección solar. ${faqData.spf_usage_tip}`,
-      links: product.url ? [{ label: `Ver ${product.name}`, url: product.url }] : [{ label: 'Ver tienda', url: STORE_BASE_URL }],
-      meta: { intent: 'faq', product_id: product.id || null, spf: true }
-    };
-  }
-
-  if (spfInfo === false) {
-    const links = [];
-    if (ozoneLink?.url) links.push({ label: ozoneLink.label || ozoneData.label, url: ozoneLink.url });
-    if (!links.length) links.push({ label: 'Ver tienda', url: STORE_BASE_URL });
-
-    return {
-      text: `Este producto no tiene protección solar. ${ozoneData.copy}`,
-      links,
-      meta: { intent: 'faq', product_id: product.id || null, spf: false }
-    };
-  }
-
+function composePaymentsResponse() {
   return {
-    text: `No tengo confirmado si ${product.name} tiene SPF.`,
-    links: [{ label: 'Ver tienda', url: STORE_BASE_URL }],
-    meta: { intent: 'faq', product_id: product.id || null, spf: 'unknown' }
+    text: 'Medios de pago: transferencia (10% OFF), Rapipago, Pago Fácil y tarjeta de débito/crédito. Para cuotas y detalle actualizado, revisá la tienda.',
+    links: [{ label: 'Ver tienda', url: 'https://www.mariatboticario.shop' }],
+    meta: { intent: 'payments', status: 'ok' }
+  };
+}
+
+function composeInstallmentsResponse() {
+  return {
+    text: 'Sí, podés pagar con tarjeta y ver las cuotas disponibles al momento de comprar. Para el detalle actualizado, revisalo en la tienda.',
+    links: [{ label: 'Ver tienda', url: 'https://www.mariatboticario.shop' }],
+    meta: { intent: 'installments', status: 'ok' }
+  };
+}
+
+function composeShippingResponse() {
+  return {
+    text: 'Hacemos envíos. El costo depende de tu ubicación: podés calcularlo en la tienda ingresando tu código postal al iniciar la compra.',
+    links: [{ label: 'Ver tienda', url: 'https://www.mariatboticario.shop' }],
+    meta: { intent: 'shipping', status: 'ok' }
+  };
+}
+
+function composePromosResponse() {
+  return {
+    text: 'Las promos vigentes pueden cambiar según la fecha. Para ver las promociones actuales, revisá la tienda.',
+    links: [{ label: 'Ver tienda', url: 'https://www.mariatboticario.shop' }],
+    meta: { intent: 'promos', status: 'ok' }
   };
 }
 
@@ -286,9 +240,13 @@ module.exports = {
   composeOrderResponse,
   composePriceResponse,
   composePaymentsResponse,
+  composeInstallmentsResponse,
   composeShippingResponse,
   composePromosResponse,
   composeInfoResponse,
+  composeSunResponse,
+  composeOzoneResponse,
+  composeSunstickResponse,
   composeFaqResponse,
   composeErrorResponse
 };
