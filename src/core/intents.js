@@ -11,9 +11,57 @@ function extractOrderId(text) {
   return m ? m[1] : null;
 }
 
+function isGreetingOnly(raw) {
+  const t = normalize(raw);
+
+  // limpiamos puntuación para detectar "hola!!!"
+  const cleaned = t.replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+
+  const greetWords = [
+    "hola",
+    "buenas",
+    "buen dia",
+    "buen día",
+    "buenas tardes",
+    "buenas noches",
+    "hello",
+    "hi"
+  ];
+
+  // Si contiene un saludo pero además contiene palabras típicas de intención,
+  // NO lo tratamos como greet (ej: "hola precio piel iluminada")
+  const intentHints = [
+    "precio","cuanto","cuánto","cuesta","sale","vale","valor","costo","coste",
+    "envio","envíos","envio","entrega","codigo postal","código postal",
+    "pago","pagos","medios de pago","transferencia","tarjeta","cuotas",
+    "promo","promos","descuento","oferta",
+    "pedido","seguimiento","tracking",
+    "spf","fps","proteccion solar","protección solar","playa","sol","uv",
+    "ozone","sunstick",
+    "para que sirve","para qué sirve","beneficios","ingredientes","modo de uso"
+  ];
+
+  const hasGreet = greetWords.some((g) => cleaned === normalize(g) || cleaned.startsWith(normalize(g) + " "));
+  if (!hasGreet) return false;
+
+  // si además hay pistas de intención, no es “saludo puro”
+  if (intentHints.some((h) => cleaned.includes(normalize(h)))) return false;
+
+  // frases típicas de saludo corto
+  if (cleaned.length <= 20) return true;
+
+  // "hola, como estas?" también cuenta como saludo
+  if (cleaned.includes("como estas") || cleaned.includes("cómo estás") || cleaned.includes("todo bien")) return true;
+
+  return false;
+}
+
 function detectIntent(text) {
   const raw = String(text || "");
   const t = normalize(raw);
+
+  // ---- GREET (saludo puro) ----
+  if (isGreetingOnly(raw)) return { intent: "greet" };
 
   const shippingKW = [
     "envio","envíos","enviar","entrega","correo",
@@ -57,12 +105,12 @@ function detectIntent(text) {
   const sunstickLookKW = [
     "deja blanco","deja blanca","deja color","mancha","marca",
     "como queda","cómo queda","queda blanco","queda blanca","rastro",
-    "se nota","deja verde","deja marron","deja marrón"
+    "se nota","deja verde","deja marron","deja marrón","deja azul","deja amarillo"
   ];
 
   const infoKW = [
     "para que sirve","para qué sirve","beneficios","ingredientes",
-    "modo de uso","como se usa","cómo se usa","rutina","usar","sirve para"
+    "modo de uso","como se usa","cómo se usa","rutina","sirve para"
   ];
 
   const priceKW = [

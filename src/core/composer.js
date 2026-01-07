@@ -3,15 +3,9 @@ const faqData = require('../data/faq.json');
 const ozoneData = require('../data/ozone.json');
 const { normalize } = require('./normalize');
 
-// ---- Consts / URLs ----
-const MT_URL = process.env.MT_URL || 'https://www.mariatboticario.shop';
+const MTB_URL = process.env.MTB_URL || 'https://www.mariatboticario.shop';
 const OZONE_URL = process.env.OZONE_URL || 'https://www.ozonelifestyle.com/';
 
-// Si querés, podés setear OZONE_SUNSTICKS_URL a una colección específica.
-// Si no existe, cae a OZONE_URL.
-const OZONE_SUNSTICKS_URL = process.env.OZONE_SUNSTICKS_URL || OZONE_URL;
-
-// ---- Utils ----
 function decodeHtmlEntities(str) {
   return String(str || '')
     .replace(/&nbsp;/g, ' ')
@@ -21,11 +15,7 @@ function decodeHtmlEntities(str) {
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&#(\d+);/g, (_, code) => {
-      try {
-        return String.fromCharCode(Number(code));
-      } catch {
-        return _;
-      }
+      try { return String.fromCharCode(Number(code)); } catch { return _; }
     });
 }
 
@@ -40,17 +30,12 @@ function stripHtml(html) {
 function normalizeArsAmount(value) {
   const n = Number(value);
   if (Number.isNaN(n)) return value;
-
-  // Heurística anti-x100:
-  // Si viene muy grande y divisible por 100, probablemente son "centavos".
   if (n >= 1000000 && n % 100 === 0) return n / 100;
-
   return n;
 }
 
 function formatCurrency(value) {
   if (value === null || value === undefined) return null;
-
   const normalized = normalizeArsAmount(value);
   if (typeof normalized !== 'number' || Number.isNaN(normalized)) return value;
 
@@ -67,7 +52,17 @@ function tenOff(price) {
   return Math.round(n * 0.9);
 }
 
-// ---- Responses ----
+function composeGreetResponse() {
+  return {
+    text: '¡Hola! Soy el asistente virtual de María T. Boticario y Ozone Lifestyle. ¿En qué te puedo ayudar? 😊\n\nPuedo ayudarte con: precios, info de productos, envíos, medios de pago y estado de pedido.',
+    links: [
+      { label: 'María T. Boticario', url: MTB_URL },
+      { label: 'Ozone Lifestyle', url: OZONE_URL }
+    ],
+    meta: { intent: 'greet', status: 'ok' }
+  };
+}
+
 function composeOrderResponse(order) {
   if (!order) {
     return {
@@ -95,7 +90,7 @@ function composeOrderResponse(order) {
 }
 
 // Soporta: product = objeto OR array de objetos (para mostrar pocket + corporal)
-function composePriceResponse(product, kits = [], kitLinks = []) {
+function composePriceResponse(product) {
   if (!product || (Array.isArray(product) && product.length === 0)) {
     return {
       text: 'No encontré ese producto. ¿Podés decirme el nombre exacto (y si es posible el tamaño/variante)?',
@@ -129,7 +124,7 @@ function composePriceResponse(product, kits = [], kitLinks = []) {
     links,
     meta: {
       intent: 'price',
-      status: products.every((p) => p?.price != null) ? 'ok' : 'missing_price',
+      status: products.every(p => p?.price != null) ? 'ok' : 'missing_price',
       product_id: products[0]?.id || null
     }
   };
@@ -164,37 +159,42 @@ function composeInfoResponse(product) {
 /**
  * Regla de negocio:
  * - Productos María T: NO tienen SPF
- * - Protección solar => Ozone Lifestyle (sitio propio)
+ * - Protección solar => Ozone Lifestyle
  */
 function composeSunResponse({ productName }) {
-  const name = productName || 'este producto';
+  const name = productName || 'Este producto';
 
   return {
-    text: `${name} no tiene protección solar. Si buscás protección, eso lo tenemos en Ozone Lifestyle (protectores solares en formato sunstick). En la web de Ozone podés ver todas las variantes y los videos de aplicación.`,
-    links: [{ label: 'Ver Ozone Lifestyle', url: OZONE_URL }],
+    text: `${name} no tiene protección solar. Si buscás protección, eso lo tenemos en Ozone Lifestyle (protectores solares en formato sunstick). En la web de Ozone podés ver todas las variantes y videos de aplicación.`,
+    links: [
+      { label: 'Ozone Lifestyle', url: OZONE_URL },
+      { label: 'María T. Boticario', url: MTB_URL }
+    ],
     meta: { intent: 'sun', status: 'ok' }
   };
 }
 
 function composeOzoneResponse() {
   return {
-    text: `Sí: los protectores solares de Ozone Lifestyle están pensados con enfoque sustentable. Para ver todas las variantes, tonos y videos de aplicación, revisá la web de Ozone.`,
-    links: [{ label: 'Ver Ozone Lifestyle', url: OZONE_URL }],
+    text: 'Sí: los protectores solares de Ozone Lifestyle están pensados con enfoque sustentable (formato sunstick). Para ver variantes, tonos y videos de aplicación, revisá la web de Ozone.',
+    links: [
+      { label: 'Ozone Lifestyle', url: OZONE_URL }
+    ],
     meta: { intent: 'ozone', status: 'ok' }
   };
 }
 
 function composeSunstickResponse() {
   return {
-    text: `Sí, cada color deja un rastro del tono (blanco/blanco, verde/verde, marrón/marrón, etc.). La mejor forma de verlo es con los videos de aplicación en la web de Ozone.`,
-    links: [{ label: 'Ver Sunsticks Ozone', url: OZONE_SUNSTICKS_URL }],
+    text: 'Sí, cada color deja un rastro del tono (blanco/blanco, verde/verde, marrón/marrón, etc.). La mejor forma de verlo es con los videos de aplicación en la web de Ozone.',
+    links: [
+      { label: 'Ver Ozone Lifestyle', url: OZONE_URL }
+    ],
     meta: { intent: 'sunstick', status: 'ok' }
   };
 }
 
 function composeFaqResponse(product) {
-  // Preguntas SPF directas tipo “X tiene SPF?”
-  // Por regla de negocio: si es producto María T => NO y derivamos a Ozone.
   if (!product) {
     return {
       text: '¿De qué producto querés saber si tiene protección solar?',
@@ -209,7 +209,7 @@ function composeFaqResponse(product) {
 function composePaymentsResponse() {
   return {
     text: 'Medios de pago: transferencia (10% OFF), Rapipago, Pago Fácil y tarjeta de débito/crédito. Para cuotas y detalle actualizado, revisá la tienda.',
-    links: [{ label: 'Ver tienda', url: MT_URL }],
+    links: [{ label: 'Ver tienda', url: MTB_URL }],
     meta: { intent: 'payments', status: 'ok' }
   };
 }
@@ -217,7 +217,7 @@ function composePaymentsResponse() {
 function composeInstallmentsResponse() {
   return {
     text: 'Sí, podés pagar con tarjeta y ver las cuotas disponibles al momento de comprar. Para el detalle actualizado, revisalo en la tienda.',
-    links: [{ label: 'Ver tienda', url: MT_URL }],
+    links: [{ label: 'Ver tienda', url: MTB_URL }],
     meta: { intent: 'installments', status: 'ok' }
   };
 }
@@ -225,7 +225,7 @@ function composeInstallmentsResponse() {
 function composeShippingResponse() {
   return {
     text: 'Hacemos envíos. El costo depende de tu ubicación: podés calcularlo en la tienda ingresando tu código postal al iniciar la compra.',
-    links: [{ label: 'Ver tienda', url: MT_URL }],
+    links: [{ label: 'Ver tienda', url: MTB_URL }],
     meta: { intent: 'shipping', status: 'ok' }
   };
 }
@@ -233,7 +233,7 @@ function composeShippingResponse() {
 function composePromosResponse() {
   return {
     text: 'Las promos vigentes pueden cambiar según la fecha. Para ver las promociones actuales, revisá la tienda.',
-    links: [{ label: 'Ver tienda', url: MT_URL }],
+    links: [{ label: 'Ver tienda', url: MTB_URL }],
     meta: { intent: 'promos', status: 'ok' }
   };
 }
@@ -247,6 +247,7 @@ function composeErrorResponse() {
 }
 
 module.exports = {
+  composeGreetResponse,
   composeOrderResponse,
   composePriceResponse,
   composePaymentsResponse,

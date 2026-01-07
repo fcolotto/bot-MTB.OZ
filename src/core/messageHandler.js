@@ -1,6 +1,7 @@
 // src/core/messageHandler.js
 const { detectIntent } = require('./intents');
 const {
+  composeGreetResponse,
   composeOrderResponse,
   composePriceResponse,
   composePaymentsResponse,
@@ -67,6 +68,11 @@ async function handleMessage(payload) {
   const intentData = detectIntent(text);
 
   try {
+    // ---- GREET ----
+    if (intentData.intent === 'greet') {
+      return { status: 200, body: composeGreetResponse() };
+    }
+
     // ---- PROMOS ----
     if (intentData.intent === 'promos') {
       return { status: 200, body: composePromosResponse() };
@@ -160,7 +166,6 @@ async function handleMessage(payload) {
 
     // ---- INFO ----
     if (intentData.intent === 'info') {
-      // si pregunta “para qué sirve X”, intentamos resolver X
       const product = await productResolver.resolveProduct(text);
       return { status: 200, body: composeInfoResponse(product) };
     }
@@ -170,19 +175,11 @@ async function handleMessage(payload) {
       const productQuery = extractProductQuery(text, faqData.spf_keywords);
       const product = productQuery ? await productResolver.resolveProduct(productQuery) : null;
       const ozoneProduct = await productResolver.resolveProduct(ozoneData.query);
-
       return { status: 200, body: composeFaqResponse(product, ozoneProduct) };
     }
 
     // ---- UNKNOWN ----
-    return {
-      status: 200,
-      body: {
-        text: '¿Querés saber precio, envíos, medios de pago o info de un producto? Decime qué necesitás 🙂',
-        links: [{ label: 'Ver tienda', url: 'https://www.mariatboticario.shop' }],
-        meta: { intent: 'unknown' }
-      }
-    };
+    return { status: 200, body: composeGreetResponse() };
   } catch (error) {
     console.error('[message] error', error.message);
     return { status: 500, body: composeErrorResponse() };
