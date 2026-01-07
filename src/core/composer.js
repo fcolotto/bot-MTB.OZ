@@ -3,6 +3,15 @@ const faqData = require('../data/faq.json');
 const ozoneData = require('../data/ozone.json');
 const { normalize } = require('./normalize');
 
+// ---- Consts / URLs ----
+const MT_URL = process.env.MT_URL || 'https://www.mariatboticario.shop';
+const OZONE_URL = process.env.OZONE_URL || 'https://www.ozonelifestyle.com/';
+
+// Si querés, podés setear OZONE_SUNSTICKS_URL a una colección específica.
+// Si no existe, cae a OZONE_URL.
+const OZONE_SUNSTICKS_URL = process.env.OZONE_SUNSTICKS_URL || OZONE_URL;
+
+// ---- Utils ----
 function decodeHtmlEntities(str) {
   return String(str || '')
     .replace(/&nbsp;/g, ' ')
@@ -12,7 +21,11 @@ function decodeHtmlEntities(str) {
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&#(\d+);/g, (_, code) => {
-      try { return String.fromCharCode(Number(code)); } catch { return _; }
+      try {
+        return String.fromCharCode(Number(code));
+      } catch {
+        return _;
+      }
     });
 }
 
@@ -27,12 +40,17 @@ function stripHtml(html) {
 function normalizeArsAmount(value) {
   const n = Number(value);
   if (Number.isNaN(n)) return value;
+
+  // Heurística anti-x100:
+  // Si viene muy grande y divisible por 100, probablemente son "centavos".
   if (n >= 1000000 && n % 100 === 0) return n / 100;
+
   return n;
 }
 
 function formatCurrency(value) {
   if (value === null || value === undefined) return null;
+
   const normalized = normalizeArsAmount(value);
   if (typeof normalized !== 'number' || Number.isNaN(normalized)) return value;
 
@@ -49,6 +67,7 @@ function tenOff(price) {
   return Math.round(n * 0.9);
 }
 
+// ---- Responses ----
 function composeOrderResponse(order) {
   if (!order) {
     return {
@@ -110,7 +129,7 @@ function composePriceResponse(product, kits = [], kitLinks = []) {
     links,
     meta: {
       intent: 'price',
-      status: products.every(p => p?.price != null) ? 'ok' : 'missing_price',
+      status: products.every((p) => p?.price != null) ? 'ok' : 'missing_price',
       product_id: products[0]?.id || null
     }
   };
@@ -145,46 +164,37 @@ function composeInfoResponse(product) {
 /**
  * Regla de negocio:
  * - Productos María T: NO tienen SPF
- * - Protección solar => Ozone Lifestyle
+ * - Protección solar => Ozone Lifestyle (sitio propio)
  */
-function composeSunResponse({ productName, ozoneLink }) {
+function composeSunResponse({ productName }) {
   const name = productName || 'este producto';
 
-  const links = [{ label: 'Ver tienda', url: 'https://www.mariatboticario.shop' }];
-  if (ozoneLink?.url) links.unshift({ label: ozoneLink.label || 'Ver Ozone Lifestyle', url: ozoneLink.url });
-
   return {
-    text: `${name} no tiene protección solar. Si buscás protección, eso lo tenemos en Ozone Lifestyle (protectores solares en formato sunstick). Podés verlos en la tienda y en los videos se ve cómo queda aplicado.`,
-    links,
+    text: `${name} no tiene protección solar. Si buscás protección, eso lo tenemos en Ozone Lifestyle (protectores solares en formato sunstick). En la web de Ozone podés ver todas las variantes y los videos de aplicación.`,
+    links: [{ label: 'Ver Ozone Lifestyle', url: OZONE_URL }],
     meta: { intent: 'sun', status: 'ok' }
   };
 }
 
-function composeOzoneResponse({ ozoneLink }) {
-  const links = [{ label: 'Ver tienda', url: 'https://www.mariatboticario.shop' }];
-  if (ozoneLink?.url) links.unshift({ label: ozoneLink.label || 'Ver Ozone Lifestyle', url: ozoneLink.url });
-
+function composeOzoneResponse() {
   return {
-    text: `Sí: los protectores solares de Ozone Lifestyle están pensados con enfoque sustentable (formato sunstick, práctico para reaplicar). Para ver variantes, tonos y videos de aplicación, revisá la tienda.`,
-    links,
+    text: `Sí: los protectores solares de Ozone Lifestyle están pensados con enfoque sustentable. Para ver todas las variantes, tonos y videos de aplicación, revisá la web de Ozone.`,
+    links: [{ label: 'Ver Ozone Lifestyle', url: OZONE_URL }],
     meta: { intent: 'ozone', status: 'ok' }
   };
 }
 
-function composeSunstickResponse({ ozoneLink }) {
-  const links = [{ label: 'Ver tienda', url: 'https://www.mariatboticario.shop' }];
-  if (ozoneLink?.url) links.unshift({ label: ozoneLink.label || 'Ver Sunstick', url: ozoneLink.url });
-
+function composeSunstickResponse() {
   return {
-    text: `Sí, cada color deja un rastro del tono (blanco/blanco, verde/verde, marrón/marrón, etc.). La mejor forma de verlo es con los videos de aplicación en la tienda.`,
-    links,
+    text: `Sí, cada color deja un rastro del tono (blanco/blanco, verde/verde, marrón/marrón, etc.). La mejor forma de verlo es con los videos de aplicación en la web de Ozone.`,
+    links: [{ label: 'Ver Sunsticks Ozone', url: OZONE_SUNSTICKS_URL }],
     meta: { intent: 'sunstick', status: 'ok' }
   };
 }
 
-function composeFaqResponse(product, ozoneLink) {
-  // Esta función queda para preguntas SPF directas tipo “X tiene SPF?”
-  // Pero ya no devolvemos "unknown": si es producto María T => NO.
+function composeFaqResponse(product) {
+  // Preguntas SPF directas tipo “X tiene SPF?”
+  // Por regla de negocio: si es producto María T => NO y derivamos a Ozone.
   if (!product) {
     return {
       text: '¿De qué producto querés saber si tiene protección solar?',
@@ -193,13 +203,13 @@ function composeFaqResponse(product, ozoneLink) {
     };
   }
 
-  return composeSunResponse({ productName: product.name, ozoneLink });
+  return composeSunResponse({ productName: product.name });
 }
 
 function composePaymentsResponse() {
   return {
     text: 'Medios de pago: transferencia (10% OFF), Rapipago, Pago Fácil y tarjeta de débito/crédito. Para cuotas y detalle actualizado, revisá la tienda.',
-    links: [{ label: 'Ver tienda', url: 'https://www.mariatboticario.shop' }],
+    links: [{ label: 'Ver tienda', url: MT_URL }],
     meta: { intent: 'payments', status: 'ok' }
   };
 }
@@ -207,7 +217,7 @@ function composePaymentsResponse() {
 function composeInstallmentsResponse() {
   return {
     text: 'Sí, podés pagar con tarjeta y ver las cuotas disponibles al momento de comprar. Para el detalle actualizado, revisalo en la tienda.',
-    links: [{ label: 'Ver tienda', url: 'https://www.mariatboticario.shop' }],
+    links: [{ label: 'Ver tienda', url: MT_URL }],
     meta: { intent: 'installments', status: 'ok' }
   };
 }
@@ -215,7 +225,7 @@ function composeInstallmentsResponse() {
 function composeShippingResponse() {
   return {
     text: 'Hacemos envíos. El costo depende de tu ubicación: podés calcularlo en la tienda ingresando tu código postal al iniciar la compra.',
-    links: [{ label: 'Ver tienda', url: 'https://www.mariatboticario.shop' }],
+    links: [{ label: 'Ver tienda', url: MT_URL }],
     meta: { intent: 'shipping', status: 'ok' }
   };
 }
@@ -223,7 +233,7 @@ function composeShippingResponse() {
 function composePromosResponse() {
   return {
     text: 'Las promos vigentes pueden cambiar según la fecha. Para ver las promociones actuales, revisá la tienda.',
-    links: [{ label: 'Ver tienda', url: 'https://www.mariatboticario.shop' }],
+    links: [{ label: 'Ver tienda', url: MT_URL }],
     meta: { intent: 'promos', status: 'ok' }
   };
 }
