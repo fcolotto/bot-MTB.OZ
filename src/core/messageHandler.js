@@ -20,6 +20,34 @@ const faqData = require('../data/faq.json');
 const ozoneData = require('../data/ozone.json');
 const { normalize } = require('./normalize');
 
+// Keywords para limpiar query de producto cuando el intent es "info"
+const INFO_KEYWORDS = [
+  'para que sirve',
+  'para qué sirve',
+  'sirve para',
+  'beneficios',
+  'beneficio',
+  'funciona para',
+  'que hace',
+  'qué hace',
+  'que es',
+  'qué es',
+  'como se usa',
+  'cómo se usa',
+  'modo de uso',
+  'como usar',
+  'cómo usar',
+  'ingredientes',
+  'ingrediente',
+  'rutina',
+  'se aplica',
+  'se usa',
+  'uso recomendado',
+  'info',
+  'informacion',
+  'información'
+];
+
 function extractProductQuery(text, keywords) {
   const normalized = normalize(text);
   let result = normalized;
@@ -154,16 +182,30 @@ async function handleMessage(payload) {
 
     // ---- INFO ----
     if (intentData.intent === 'info') {
-      // intenta resolver producto desde el texto completo (lo simplificamos, anda bien para “para qué sirve X”)
-      const product = await productResolver.resolveProduct(text);
+      // Limpia el texto para extraer mejor el producto
+      const productQuery = extractProductQuery(text, INFO_KEYWORDS);
+
+      // si la query limpia quedó muy corta, probamos igual con el texto original
+      const queryToUse = productQuery && productQuery.length >= 3 ? productQuery : text;
+
+      const product = await productResolver.resolveProduct(queryToUse);
       const draftBody = composeInfoResponse(product);
+
       await maybeRewriteText({ userText: text, draftBody });
       return { status: 200, body: draftBody };
     }
 
-    // ---- FAQ ----
+    // ---- FAQ (SPF) ----
     if (intentData.intent === 'faq') {
-      const productQuery = extractProductQuery(text, faqData.spf_keywords);
+      const spfKeywords = faqData?.spf_keywords || [
+        'spf',
+        'proteccion solar',
+        'protección solar',
+        'protector solar',
+        'tiene spf'
+      ];
+
+      const productQuery = extractProductQuery(text, spfKeywords);
       const product = productQuery ? await productResolver.resolveProduct(productQuery) : null;
       const ozoneProduct = await productResolver.resolveProduct(ozoneData.query);
 
