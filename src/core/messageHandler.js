@@ -19,6 +19,9 @@ const {
 const tiendaApi = require('../services/tiendaApi');
 const productResolver = require('../services/productResolver');
 
+// ✅ NUEVO: cliente Tiendanube de Ozone (usa token + store_id)
+const ozoneTN = require('../services/tiendanubeOzone');
+
 const faqData = require('../data/faq.json');
 const ozoneData = require('../data/ozone.json');
 const { normalize } = require('./normalize');
@@ -47,6 +50,42 @@ function wantsPocketOr50(text) {
 function wantsCorporalOr195(text) {
   const t = normalize(text);
   return t.includes('corporal') || t.includes('195 ml') || t.includes('195ml') || t.match(/\b195\b/);
+}
+
+// ✅ NUEVO: heurística simple para decidir "esto es Ozone"
+function looksLikeOzonePrice(text) {
+  const t = normalize(text);
+
+  // Si explícitamente mencionan ozone/sunstick/kids
+  if (t.includes('ozone') || t.includes('sunstick') || t.includes('kids')) return true;
+
+  // Si en tu ozone.json hay keywords, las usamos
+  const kws = []
+    .concat(ozoneData?.keywords || [])
+    .concat(ozoneData?.query ? [ozoneData.query] : [])
+    .filter(Boolean)
+    .map((k) => normalize(k));
+
+  if (kws.length > 0) {
+    return kws.some((k) => k && t.includes(k));
+  }
+
+  return false;
+}
+
+// ✅ NUEVO: adapta el formato de Ozone (findBestProduct) a lo que espera el composer
+function adaptOzoneProductForComposer(p) {
+  if (!p) return null;
+  return {
+    id: p.id,
+    name: p.name,
+    price: p.price,
+    url: p.url,
+    // algunos composers usan "link" en vez de "url"
+    link: p.url,
+    available: p.available,
+    source: 'ozone'
+  };
 }
 
 async function handleMessage(payload) {
@@ -138,7 +177,7 @@ async function handleMessage(payload) {
         'precio','cuesta','vale','valor','cuanto','cuánto','coste','costo'
       ]);
 
-      // Caso especial: Piel iluminada (Pocket + Corporal)
+      // Caso especial: Piel iluminada (Pocket + Corporal) => MTB
       if (looksLikePielIluminada(text)) {
         const wantPocket = wantsPocketOr50(text);
         const wantCorporal = wantsCorporalOr195(text);
@@ -160,6 +199,27 @@ async function handleMessage(payload) {
         return { status: 200, body: composePriceResponse(list) };
       }
 
+      // ✅ NUEVO: Si parece una consulta de precio Ozone, consultamos Tiendanube Ozone real (token)
+      if (looksLikeOzonePrice(text)) {
+        const q = productQuery || text;
+        const oz = await ozoneTN.findBestProduct(q);
+        const product = adaptOzoneProductForComposer(oz);
+
+        if (!product) {
+          return {
+            status: 200,
+            body: {
+              text: `No encontré "${q}" en Ozone. ¿Podés decirme el nombre exacto o pasarme una palabra clave (ej: Sunstick Kids, Blanco, Medium)?`,
+              links: [],
+              meta: { intent: 'price', brand: 'ozone', status: 'not_found' }
+            }
+          };
+        }
+
+        return { status: 200, body: composePriceResponse(product) };
+      }
+
+      // Default MTB (lo que ya tenías)
       const product = await productResolver.resolveProduct(productQuery || text);
       return { status: 200, body: composePriceResponse(product) };
     }
