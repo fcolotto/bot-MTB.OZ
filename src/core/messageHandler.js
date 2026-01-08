@@ -1,151 +1,278 @@
-// src/core/intents.js
-const { normalize } = require("./normalize");
+// src/core/messageHandler.js
+const { detectIntent } = require('./intents');
+const {
+  composeGreetResponse,
+  composeOrderResponse,
+  composePriceResponse,
+  composePaymentsResponse,
+  composeInstallmentsResponse,
+  composeShippingResponse,
+  composePromosResponse,
+  composeInfoResponse,
+  composeSunResponse,
+  composeOzoneResponse,
+  composeSunstickResponse,
+  composeFaqResponse,
+  composeErrorResponse
+} = require('./composer');
 
-function hasAny(text, keywords) {
+const tiendaApi = require('../services/tiendaApi');
+const productResolver = require('../services/productResolver');
+const ozoneTN = require('../services/tiendanubeOzone');
+
+const faqData = require('../data/faq.json');
+const ozoneData = require('../data/ozone.json');
+const { normalize } = require('./normalize');
+
+// --------------------
+// Memoria corta (RAM)
+// --------------------
+const LAST = new Map(); // userId -> { ts, lastIntent, lastQuery, lastBrand }
+const TTL_MS = 10 * 60 * 1000;
+
+function setLast(userId, ctx) {
+  LAST.set(userId, { ...ctx, ts: Date.now() });
+}
+function getLast(userId) {
+  const v = LAST.get(userId);
+  if (!v) return null;
+  if (Date.now() - v.ts > TTL_MS) {
+    LAST.delete(userId);
+    return null;
+  }
+  return v;
+}
+
+function extractProductQuery(text, keywords) {
+  const normalized = normalize(text);
+  let result = normalized;
+
+  (keywords || []).forEach((keyword) => {
+    result = result.replace(normalize(keyword), ' ');
+  });
+
+  return result.replace(/\s+/g, ' ').trim();
+}
+
+function looksLikePielIluminada(text) {
   const t = normalize(text);
-  return keywords.some((k) => t.includes(normalize(k)));
+  return t.includes('piel iluminada');
 }
 
-function extractOrderId(text) {
-  const m = String(text || "").match(/\b(\d{4,8})\b/);
-  return m ? m[1] : null;
+function wantsPocketOr50(text) {
+  const t = normalize(text);
+  return t.includes('pocket') || t.includes('50 ml') || t.includes('50ml') || t.match(/\b50\b/);
 }
 
-function isGreetingOnly(raw) {
-  const t = normalize(raw);
+function wantsCorporalOr195(text) {
+  const t = normalize(text);
+  return t.includes('corporal') || t.includes('195 ml') || t.includes('195ml') || t.match(/\b195\b/);
+}
 
-  const cleaned = t.replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+function looksLikeOzonePrice(text) {
+  const t = normalize(text);
+  if (t.includes('ozone') || t.includes('sunstick') || t.includes('kids')) return true;
 
-  const greetWords = [
-    "hola",
-    "buenas",
-    "buen dia",
-    "buen día",
-    "buenas tardes",
-    "buenas noches",
-    "hello",
-    "hi"
-  ];
+  const kws = []
+    .concat(ozoneData?.keywords || [])
+    .concat(ozoneData?.query ? [ozoneData.query] : [])
+    .filter(Boolean)
+    .map((k) => normalize(k));
 
-  const intentHints = [
-    "precio","cuanto","cuánto","cuesta","sale","vale","valor","costo","coste",
-    "envio","envíos","envio","entrega","codigo postal","código postal",
-    "pago","pagos","medios de pago","transferencia","tarjeta","cuotas",
-    "promo","promos","descuento","oferta",
-    "pedido","seguimiento","tracking",
-    "spf","fps","proteccion solar","protección solar","playa","sol","uv",
-    "ozone","sunstick","kids",
-    "para que sirve","para qué sirve","beneficios","ingredientes","modo de uso"
-  ];
-
-  const hasGreet = greetWords.some((g) => cleaned === normalize(g) || cleaned.startsWith(normalize(g) + " "));
-  if (!hasGreet) return false;
-
-  if (intentHints.some((h) => cleaned.includes(normalize(h)))) return false;
-
-  if (cleaned.length <= 20) return true;
-
-  if (cleaned.includes("como estas") || cleaned.includes("cómo estás") || cleaned.includes("todo bien")) return true;
-
+  if (kws.length > 0) return kws.some((k) => k && t.includes(k));
   return false;
 }
 
-function detectIntent(text) {
-  const raw = String(text || "");
-  const t = normalize(raw);
-
-  // ---- GREET (saludo puro) ----
-  if (isGreetingOnly(raw)) return { intent: "greet" };
-
-  const shippingKW = [
-    "envio","envíos","enviar","entrega","correo",
-    "codigo postal","código postal","cp","domicilio","retiro","retirar","sucursal",
-    "andreani","oca"
-  ];
-
-  const installmentsKW = [
-    "cuotas", "en cuotas", "3 cuotas", "6 cuotas", "12 cuotas", "sin interes", "sin interés"
-  ];
-
-  const paymentsKW = [
-    "pago","pagos","medio de pago","medios de pago","como pagar","cómo pagar",
-    "transferencia","debito","débito","credito","crédito","tarjeta",
-    "rapipago","pago facil","pago fácil","mercadopago"
-  ];
-
-  // ✅ IMPORTANTE: saco "sale" de promos porque rompe "cuanto sale X"
-  const promosKW = [
-    "promo","promos","promocion","promoción","oferta","ofertas",
-    "descuento","descuentos","cyber","black","hotsale","hot sale"
-  ];
-
-  const orderKW = [
-    "pedido","seguimiento","tracking","numero de pedido","número de pedido",
-    "estado de mi pedido","donde esta mi pedido","dónde está mi pedido",
-    "no me llego","no me llegó","llego mi pedido","llegó mi pedido"
-  ];
-
-  const sunKW = [
-    "spf","fps","protector","proteccion solar","protección solar",
-    "solar","sol","playa","verano","uv","rayos"
-  ];
-
-  const ozoneKW = [
-    "ozone","ozone lifestyle","sunstick","kids","protector solar","protectores solares"
-  ];
-
-  const sunstickLookKW = [
-    "deja blanco","deja blanca","deja color","mancha","marca",
-    "como queda","cómo queda","queda blanco","queda blanca","rastro",
-    "se nota","deja verde","deja marron","deja marrón","deja azul","deja amarillo"
-  ];
-
-  const infoKW = [
-    "para que sirve","para qué sirve","beneficios","ingredientes",
-    "modo de uso","como se usa","cómo se usa","rutina","sirve para"
-  ];
-
-  // ✅ Agrego "sale" como keyword de PRICE (para "cuanto sale X")
-  const priceKW = [
-    "precio","cuanto","cuánto","cuesta","sale","vale","valor","costo","coste"
-  ];
-
-  // 1) promos
-  if (hasAny(t, promosKW)) return { intent: "promos" };
-
-  // 2) cuotas (más específico que payments)
-  if (hasAny(t, installmentsKW)) return { intent: "installments" };
-
-  // 3) payments
-  if (hasAny(t, paymentsKW)) return { intent: "payments" };
-
-  // 4) shipping
-  if (hasAny(t, shippingKW)) return { intent: "shipping" };
-
-  // 5) order
-  if (hasAny(t, orderKW)) {
-    const orderId = extractOrderId(raw);
-    if (orderId) return { intent: "order", orderId };
-    return { intent: "order" };
-  }
-
-  // ✅ 6) PRICE antes que ozone/sunstick/sun (para "precio sunstick kids")
-  if (hasAny(t, priceKW)) return { intent: "price" };
-
-  // 7) Sunstick “cómo queda / deja blanco” (más específico)
-  if (hasAny(t, ozoneKW) && hasAny(t, sunstickLookKW)) return { intent: "sunstick" };
-  if (hasAny(t, sunstickLookKW) && t.includes("sunstick")) return { intent: "sunstick" };
-
-  // 8) Ozone general
-  if (hasAny(t, ozoneKW)) return { intent: "ozone" };
-
-  // 9) Sol/SPF general
-  if (hasAny(t, sunKW)) return { intent: "sun" };
-
-  // 10) info
-  if (hasAny(t, infoKW)) return { intent: "info" };
-
-  return { intent: "unknown" };
+function adaptOzoneProductForComposer(p) {
+  if (!p) return null;
+  return {
+    id: p.id,
+    name: p.name,
+    price: p.price,
+    url: p.url,
+    link: p.url,
+    available: p.available,
+    source: 'ozone'
+  };
 }
 
-module.exports = { detectIntent };
+// Follow-up tipo: "y la corporal?" / "la pocket?" / "y el sunstick kids?"
+function isFollowUp(text) {
+  const t = normalize(text);
+  if (t.length > 45) return false; // follow ups suelen ser cortos
+  return (
+    t.startsWith('y ') ||
+    t.startsWith('y la') ||
+    t.startsWith('y el') ||
+    t.startsWith('la ') ||
+    t.startsWith('el ') ||
+    t.startsWith('esa ') ||
+    t.startsWith('ese ') ||
+    t.includes('corporal') ||
+    t.includes('pocket') ||
+    t.includes('kids') ||
+    t.includes('sunstick') ||
+    t.includes('crema')
+  );
+}
+
+async function handleMessage(payload) {
+  const { channel, user_id: userId, text } = payload || {};
+
+  if (!channel || !userId || !text) {
+    return {
+      status: 400,
+      body: {
+        text: 'Faltan datos del mensaje. Enviá channel, user_id y text.',
+        links: [],
+        meta: { intent: 'validation_error' }
+      }
+    };
+  }
+
+  console.log(`[message] channel=${channel} user=${userId}`);
+
+  let intentData = detectIntent(text);
+  const last = getLast(userId);
+
+  // ✅ Si es unknown pero parece follow-up, y antes hubo price, lo tratamos como price
+  if (intentData.intent === 'unknown' && last?.lastIntent === 'price' && isFollowUp(text)) {
+    intentData = { intent: 'price', _followup: true };
+  }
+
+  try {
+    if (intentData.intent === 'greet') {
+      return { status: 200, body: composeGreetResponse() };
+    }
+
+    if (intentData.intent === 'promos') {
+      return { status: 200, body: composePromosResponse() };
+    }
+
+    if (intentData.intent === 'payments') {
+      return { status: 200, body: composePaymentsResponse() };
+    }
+
+    if (intentData.intent === 'installments') {
+      return { status: 200, body: composeInstallmentsResponse() };
+    }
+
+    if (intentData.intent === 'shipping') {
+      return { status: 200, body: composeShippingResponse() };
+    }
+
+    if (intentData.intent === 'order') {
+      if (intentData.orderId) {
+        const order = await tiendaApi.getOrder(intentData.orderId);
+        return { status: 200, body: composeOrderResponse(order) };
+      }
+
+      return {
+        status: 200,
+        body: {
+          text: 'Necesito el número de pedido para ayudarte. ¿Lo tenés a mano?',
+          links: [],
+          meta: { intent: 'order', status: 'needs_order_id' }
+        }
+      };
+    }
+
+    if (intentData.intent === 'ozone' || intentData.intent === 'sunstick' || intentData.intent === 'sun') {
+      const ozoneProduct = await productResolver.resolveProduct(ozoneData.query);
+
+      if (intentData.intent === 'sun' && looksLikePielIluminada(text)) {
+        const mtb = await productResolver.resolveProduct('piel iluminada');
+        return { status: 200, body: composeSunResponse({ productName: mtb?.name || 'Piel Iluminada', ozoneLink: ozoneProduct }) };
+      }
+
+      if (intentData.intent === 'sunstick') {
+        return { status: 200, body: composeSunstickResponse({ ozoneLink: ozoneProduct }) };
+      }
+
+      if (intentData.intent === 'ozone') {
+        return { status: 200, body: composeOzoneResponse({ ozoneLink: ozoneProduct }) };
+      }
+
+      return { status: 200, body: composeSunResponse({ productName: null, ozoneLink: ozoneProduct }) };
+    }
+
+    // ---- PRICE ----
+    if (intentData.intent === 'price') {
+      const productQuery = extractProductQuery(text, [
+        'precio','cuesta','sale','vale','valor','cuanto','cuánto','coste','costo'
+      ]);
+
+      // ✅ si es follow-up y no hay query, reutilizamos la última
+      const qBase = (productQuery || '').trim() ? productQuery : (last?.lastQuery || text);
+
+      // Caso especial MTB: Piel iluminada
+      if (looksLikePielIluminada(qBase)) {
+        const wantPocket = wantsPocketOr50(text);
+        const wantCorporal = wantsCorporalOr195(text);
+
+        if (wantPocket && !wantCorporal) {
+          const pocket = await productResolver.resolveProduct('piel iluminada pocket');
+          setLast(userId, { lastIntent: 'price', lastQuery: 'piel iluminada pocket', lastBrand: 'mtb' });
+          return { status: 200, body: composePriceResponse(pocket) };
+        }
+
+        if (wantCorporal && !wantPocket) {
+          const corporal = await productResolver.resolveProduct('piel iluminada corporal');
+          setLast(userId, { lastIntent: 'price', lastQuery: 'piel iluminada corporal', lastBrand: 'mtb' });
+          return { status: 200, body: composePriceResponse(corporal) };
+        }
+
+        const pocket = await productResolver.resolveProduct('piel iluminada pocket');
+        const corporal = await productResolver.resolveProduct('piel iluminada corporal');
+        const list = [pocket, corporal].filter(Boolean);
+
+        setLast(userId, { lastIntent: 'price', lastQuery: 'piel iluminada', lastBrand: 'mtb' });
+        return { status: 200, body: composePriceResponse(list) };
+      }
+
+      // ✅ Ozone real (token)
+      if (looksLikeOzonePrice(qBase)) {
+        const oz = await ozoneTN.findBestProduct(qBase);
+        const product = adaptOzoneProductForComposer(oz);
+
+        if (!product) {
+          return {
+            status: 200,
+            body: {
+              text: `No encontré "${qBase}" en Ozone. ¿Podés decirme el nombre exacto? (ej: Sunstick Kids, Blanco, Medium)`,
+              links: [],
+              meta: { intent: 'price', brand: 'ozone', status: 'not_found' }
+            }
+          };
+        }
+
+        setLast(userId, { lastIntent: 'price', lastQuery: qBase, lastBrand: 'ozone' });
+        return { status: 200, body: composePriceResponse(product) };
+      }
+
+      // Default MTB
+      const product = await productResolver.resolveProduct(qBase);
+      setLast(userId, { lastIntent: 'price', lastQuery: qBase, lastBrand: 'mtb' });
+      return { status: 200, body: composePriceResponse(product) };
+    }
+
+    if (intentData.intent === 'info') {
+      const product = await productResolver.resolveProduct(text);
+      return { status: 200, body: composeInfoResponse(product) };
+    }
+
+    if (intentData.intent === 'faq') {
+      const productQuery = extractProductQuery(text, faqData.spf_keywords);
+      const product = productQuery ? await productResolver.resolveProduct(productQuery) : null;
+      const ozoneProduct = await productResolver.resolveProduct(ozoneData.query);
+      return { status: 200, body: composeFaqResponse(product, ozoneProduct) };
+    }
+
+    return { status: 200, body: composeGreetResponse() };
+  } catch (error) {
+    console.error('[message] error', error.message);
+    return { status: 500, body: composeErrorResponse() };
+  }
+}
+
+module.exports = { handleMessage };
