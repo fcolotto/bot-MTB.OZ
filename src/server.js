@@ -9,6 +9,7 @@ const messageRoute = require('./routes/message');
 const whatsappRoute = require('./routes/whatsapp');
 const debugRoute = require('./routes/debug');
 const healthOzoneRoute = require('./routes/healthOzone');
+const ozoneRoute = require('./routes/ozone');
 
 const app = express();
 app.disable('x-powered-by');

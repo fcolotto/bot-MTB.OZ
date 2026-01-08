@@ -13,7 +13,6 @@ function baseUrl() {
   return `https://api.tiendanube.com/v1/${storeId}`;
 }
 
-// Normaliza para buscar parecido
 function normalize(str) {
   return String(str || "")
     .toLowerCase()
@@ -36,7 +35,6 @@ function getName(p) {
 }
 
 function getPrice(p) {
-  // Tiendanube suele devolver price como string/number u obj por idioma
   const price = p?.price;
   if (price == null) return null;
   if (typeof price === "number") return price;
@@ -45,7 +43,6 @@ function getPrice(p) {
 }
 
 function getUrl(p) {
-  // depende store; muchas veces viene "canonical_url" o "url" o "permalink"
   return p?.canonical_url || p?.url || p?.permalink || null;
 }
 
@@ -55,7 +52,6 @@ function scoreMatch(q, name) {
   if (!nq || !nn) return 0;
   if (nn === nq) return 100;
   if (nn.includes(nq)) return 80;
-  // score simple por palabras
   const qWords = new Set(nq.split(" "));
   const nWords = new Set(nn.split(" "));
   let hit = 0;
@@ -70,19 +66,14 @@ async function listProductsPage(page = 1, perPage = 50) {
   );
   const data = await r.json();
   if (!r.ok) {
-    const msg = data?.message || "Tiendanube error";
-    const desc = data?.description || "";
-    const err = new Error(`${msg}${desc ? " - " + desc : ""}`);
+    const err = new Error(data?.message || "Tiendanube error");
     err.status = r.status;
-    err.data = data;
     throw err;
   }
   return data;
 }
 
 async function findBestProduct(q) {
-  // estrategia: traer 2 páginas (100 productos) y matchear.
-  // si tu catálogo es enorme, después lo optimizamos con cache.
   const pages = await Promise.all([
     listProductsPage(1, 50),
     listProductsPage(2, 50),
@@ -93,8 +84,7 @@ async function findBestProduct(q) {
   let bestScore = 0;
 
   for (const p of all) {
-    const name = getName(p);
-    const s = scoreMatch(q, name);
+    const s = scoreMatch(q, getName(p));
     if (s > bestScore) {
       best = p;
       bestScore = s;
