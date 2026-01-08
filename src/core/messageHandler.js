@@ -18,30 +18,13 @@ const {
 
 const tiendaApi = require('../services/tiendaApi');
 const productResolver = require('../services/productResolver');
+
+// ✅ cliente Tiendanube de Ozone (usa token + store_id)
 const ozoneTN = require('../services/tiendanubeOzone');
 
 const faqData = require('../data/faq.json');
 const ozoneData = require('../data/ozone.json');
 const { normalize } = require('./normalize');
-
-// --------------------
-// Memoria corta (RAM)
-// --------------------
-const LAST = new Map(); // userId -> { ts, lastIntent, lastQuery, lastBrand }
-const TTL_MS = 10 * 60 * 1000;
-
-function setLast(userId, ctx) {
-  LAST.set(userId, { ...ctx, ts: Date.now() });
-}
-function getLast(userId) {
-  const v = LAST.get(userId);
-  if (!v) return null;
-  if (Date.now() - v.ts > TTL_MS) {
-    LAST.delete(userId);
-    return null;
-  }
-  return v;
-}
 
 function extractProductQuery(text, keywords) {
   const normalized = normalize(text);
@@ -69,8 +52,11 @@ function wantsCorporalOr195(text) {
   return t.includes('corporal') || t.includes('195 ml') || t.includes('195ml') || t.match(/\b195\b/);
 }
 
+// heurística simple para decidir "esto es Ozone"
 function looksLikeOzonePrice(text) {
   const t = normalize(text);
+
+  // marca explícita
   if (t.includes('ozone') || t.includes('sunstick') || t.includes('kids')) return true;
 
   const kws = []
@@ -79,10 +65,14 @@ function looksLikeOzonePrice(text) {
     .filter(Boolean)
     .map((k) => normalize(k));
 
-  if (kws.length > 0) return kws.some((k) => k && t.includes(k));
+  if (kws.length > 0) {
+    return kws.some((k) => k && t.includes(k));
+  }
+
   return false;
 }
 
+// adapta el formato Ozone al formato esperado por composer
 function adaptOzoneProductForComposer(p) {
   if (!p) return null;
   return {
@@ -94,26 +84,6 @@ function adaptOzoneProductForComposer(p) {
     available: p.available,
     source: 'ozone'
   };
-}
-
-// Follow-up tipo: "y la corporal?" / "la pocket?"
-function isFollowUp(text) {
-  const t = normalize(text);
-  if (t.length > 45) return false;
-  return (
-    t.startsWith('y ') ||
-    t.startsWith('y la') ||
-    t.startsWith('y el') ||
-    t.startsWith('la ') ||
-    t.startsWith('el ') ||
-    t.startsWith('esa ') ||
-    t.startsWith('ese ') ||
-    t.includes('corporal') ||
-    t.includes('pocket') ||
-    t.includes('kids') ||
-    t.includes('sunstick') ||
-    t.includes('crema')
-  );
 }
 
 async function handleMessage(payload) {
@@ -132,35 +102,35 @@ async function handleMessage(payload) {
 
   console.log(`[message] channel=${channel} user=${userId}`);
 
-  let intentData = detectIntent(text);
-  const last = getLast(userId);
-
-  // ✅ follow-up: si antes hubo price, tratamos como price
-  if (intentData.intent === 'unknown' && last?.lastIntent === 'price' && isFollowUp(text)) {
-    intentData = { intent: 'price', _followup: true };
-  }
+  const intentData = detectIntent(text);
 
   try {
+    // ---- GREET ----
     if (intentData.intent === 'greet') {
       return { status: 200, body: composeGreetResponse() };
     }
 
+    // ---- PROMOS ----
     if (intentData.intent === 'promos') {
       return { status: 200, body: composePromosResponse() };
     }
 
+    // ---- PAYMENTS ----
     if (intentData.intent === 'payments') {
       return { status: 200, body: composePaymentsResponse() };
     }
 
+    // ---- INSTALLMENTS ----
     if (intentData.intent === 'installments') {
       return { status: 200, body: composeInstallmentsResponse() };
     }
 
+    // ---- SHIPPING ----
     if (intentData.intent === 'shipping') {
       return { status: 200, body: composeShippingResponse() };
     }
 
+    // ---- ORDER ----
     if (intentData.intent === 'order') {
       if (intentData.orderId) {
         const order = await tiendaApi.getOrder(intentData.orderId);
@@ -177,12 +147,17 @@ async function handleMessage(payload) {
       };
     }
 
+    // ---- SUN / OZONE / SUNSTICK ----
     if (intentData.intent === 'ozone' || intentData.intent === 'sunstick' || intentData.intent === 'sun') {
       const ozoneProduct = await productResolver.resolveProduct(ozoneData.query);
 
+      // “piel iluminada + playa/sol” => NO SPF + Ozone
       if (intentData.intent === 'sun' && looksLikePielIluminada(text)) {
         const mtb = await productResolver.resolveProduct('piel iluminada');
-        return { status: 200, body: composeSunResponse({ productName: mtb?.name || 'Piel Iluminada', ozoneLink: ozoneProduct }) };
+        return {
+          status: 200,
+          body: composeSunResponse({ productName: mtb?.name || 'Piel Iluminada', ozoneLink: ozoneProduct })
+        };
       }
 
       if (intentData.intent === 'sunstick') {
@@ -193,69 +168,70 @@ async function handleMessage(payload) {
         return { status: 200, body: composeOzoneResponse({ ozoneLink: ozoneProduct }) };
       }
 
+      // sun genérico
       return { status: 200, body: composeSunResponse({ productName: null, ozoneLink: ozoneProduct }) };
     }
 
+    // ---- PRICE ----
     if (intentData.intent === 'price') {
       const productQuery = extractProductQuery(text, [
-        'precio','cuesta','sale','vale','valor','cuanto','cuánto','coste','costo'
+        'precio','cuesta','vale','valor','cuanto','cuánto','coste','costo','sale'
       ]);
 
-      const qBase = (productQuery || '').trim() ? productQuery : (last?.lastQuery || text);
-
-      if (looksLikePielIluminada(qBase)) {
+      // Caso especial: Piel iluminada (Pocket + Corporal) => MTB
+      if (looksLikePielIluminada(text)) {
         const wantPocket = wantsPocketOr50(text);
         const wantCorporal = wantsCorporalOr195(text);
 
         if (wantPocket && !wantCorporal) {
           const pocket = await productResolver.resolveProduct('piel iluminada pocket');
-          setLast(userId, { lastIntent: 'price', lastQuery: 'piel iluminada pocket', lastBrand: 'mtb' });
           return { status: 200, body: composePriceResponse(pocket) };
         }
 
         if (wantCorporal && !wantPocket) {
           const corporal = await productResolver.resolveProduct('piel iluminada corporal');
-          setLast(userId, { lastIntent: 'price', lastQuery: 'piel iluminada corporal', lastBrand: 'mtb' });
           return { status: 200, body: composePriceResponse(corporal) };
         }
 
+        // si no especifica => devolvemos ambos
         const pocket = await productResolver.resolveProduct('piel iluminada pocket');
         const corporal = await productResolver.resolveProduct('piel iluminada corporal');
         const list = [pocket, corporal].filter(Boolean);
-
-        setLast(userId, { lastIntent: 'price', lastQuery: 'piel iluminada', lastBrand: 'mtb' });
         return { status: 200, body: composePriceResponse(list) };
       }
 
-      if (looksLikeOzonePrice(qBase)) {
-        const oz = await ozoneTN.findBestProduct(qBase);
+      // Ozone por token
+      if (looksLikeOzonePrice(text)) {
+        const q = productQuery || text;
+        const oz = await ozoneTN.findBestProduct(q);
         const product = adaptOzoneProductForComposer(oz);
 
         if (!product) {
           return {
             status: 200,
             body: {
-              text: `No encontré "${qBase}" en Ozone. ¿Podés decirme el nombre exacto? (ej: Sunstick Kids, Blanco, Medium)`,
+              text: `No encontré "${q}" en Ozone. ¿Podés decirme el nombre exacto o una palabra clave (ej: Sunstick Kids, Blanco, Medium)?`,
               links: [],
               meta: { intent: 'price', brand: 'ozone', status: 'not_found' }
             }
           };
         }
 
-        setLast(userId, { lastIntent: 'price', lastQuery: qBase, lastBrand: 'ozone' });
         return { status: 200, body: composePriceResponse(product) };
       }
 
-      const product = await productResolver.resolveProduct(qBase);
-      setLast(userId, { lastIntent: 'price', lastQuery: qBase, lastBrand: 'mtb' });
+      // Default MTB
+      const product = await productResolver.resolveProduct(productQuery || text);
       return { status: 200, body: composePriceResponse(product) };
     }
 
+    // ---- INFO ----
     if (intentData.intent === 'info') {
       const product = await productResolver.resolveProduct(text);
       return { status: 200, body: composeInfoResponse(product) };
     }
 
+    // ---- FAQ (tipo “X tiene SPF?”) ----
     if (intentData.intent === 'faq') {
       const productQuery = extractProductQuery(text, faqData.spf_keywords);
       const product = productQuery ? await productResolver.resolveProduct(productQuery) : null;
@@ -263,6 +239,7 @@ async function handleMessage(payload) {
       return { status: 200, body: composeFaqResponse(product, ozoneProduct) };
     }
 
+    // ---- UNKNOWN ----
     return { status: 200, body: composeGreetResponse() };
   } catch (error) {
     console.error('[message] error', error.message);
