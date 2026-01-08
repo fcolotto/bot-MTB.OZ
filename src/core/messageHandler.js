@@ -96,10 +96,10 @@ function adaptOzoneProductForComposer(p) {
   };
 }
 
-// Follow-up tipo: "y la corporal?" / "la pocket?" / "y el sunstick kids?"
+// Follow-up tipo: "y la corporal?" / "la pocket?"
 function isFollowUp(text) {
   const t = normalize(text);
-  if (t.length > 45) return false; // follow ups suelen ser cortos
+  if (t.length > 45) return false;
   return (
     t.startsWith('y ') ||
     t.startsWith('y la') ||
@@ -135,7 +135,7 @@ async function handleMessage(payload) {
   let intentData = detectIntent(text);
   const last = getLast(userId);
 
-  // ✅ Si es unknown pero parece follow-up, y antes hubo price, lo tratamos como price
+  // ✅ follow-up: si antes hubo price, tratamos como price
   if (intentData.intent === 'unknown' && last?.lastIntent === 'price' && isFollowUp(text)) {
     intentData = { intent: 'price', _followup: true };
   }
@@ -196,16 +196,13 @@ async function handleMessage(payload) {
       return { status: 200, body: composeSunResponse({ productName: null, ozoneLink: ozoneProduct }) };
     }
 
-    // ---- PRICE ----
     if (intentData.intent === 'price') {
       const productQuery = extractProductQuery(text, [
         'precio','cuesta','sale','vale','valor','cuanto','cuánto','coste','costo'
       ]);
 
-      // ✅ si es follow-up y no hay query, reutilizamos la última
       const qBase = (productQuery || '').trim() ? productQuery : (last?.lastQuery || text);
 
-      // Caso especial MTB: Piel iluminada
       if (looksLikePielIluminada(qBase)) {
         const wantPocket = wantsPocketOr50(text);
         const wantCorporal = wantsCorporalOr195(text);
@@ -230,7 +227,6 @@ async function handleMessage(payload) {
         return { status: 200, body: composePriceResponse(list) };
       }
 
-      // ✅ Ozone real (token)
       if (looksLikeOzonePrice(qBase)) {
         const oz = await ozoneTN.findBestProduct(qBase);
         const product = adaptOzoneProductForComposer(oz);
@@ -250,7 +246,6 @@ async function handleMessage(payload) {
         return { status: 200, body: composePriceResponse(product) };
       }
 
-      // Default MTB
       const product = await productResolver.resolveProduct(qBase);
       setLast(userId, { lastIntent: 'price', lastQuery: qBase, lastBrand: 'mtb' });
       return { status: 200, body: composePriceResponse(product) };
