@@ -128,7 +128,13 @@ function mentionsSunstick(t) {
 }
 
 function mentionsKids(t) {
-  return /\bkids?\b/.test(t) || /\bni(n|ñ)os?\b/.test(t) || t.includes('infantil') || t.includes('bebe') || t.includes('bebé');
+  return (
+    /\bkids?\b/.test(t) ||
+    /\bni(n|ñ)os?\b/.test(t) ||
+    t.includes('infantil') ||
+    t.includes('bebe') ||
+    t.includes('bebé')
+  );
 }
 
 function isAskPrice(t) {
@@ -138,6 +144,10 @@ function isAskPrice(t) {
     /\bcuanto sale\b/.test(t) ||
     /\bvalor\b/.test(t)
   );
+}
+
+function isAskColorsOrTones(t) {
+  return /\bcolor(es)?\b/.test(t) || /\btono(s)?\b/.test(t);
 }
 
 router.post('/', async (req, res) => {
@@ -155,6 +165,7 @@ router.post('/', async (req, res) => {
 
     // A) Pregunta por protección solar + venía hablando de un producto
     if (isAskSunProtection(t) && session.lastProductName && !mentionsSunstick(t)) {
+      // (no seteo lastProductName acá porque no sabemos si quiere SunStick o Kids)
       return res.status(200).json({
         text:
           `**${session.lastProductName}** no tiene protección solar.\n\n` +
@@ -168,13 +179,36 @@ router.post('/', async (req, res) => {
       });
     }
 
+    // A2) Si quedaron hablando de SunStick Kids y preguntan "colores/tonos"
+    if (session.lastProductName === 'SunStick Kids' && isAskColorsOrTones(t)) {
+      return res.status(200).json({
+        text:
+          `Los colores de **SunStick Kids** son: **Azul / Verde / Amarillo**.\n` +
+          `Acá podés verlos (con precio actualizado) 👇`,
+        links: [{ label: 'SunStick Kids (colores y precio)', url: OZONE_KIDS_URL }],
+        meta: { intent: 'kids_colors', status: 'ok', product: 'sunstick_kids' }
+      });
+    }
+
+    // A3) Si quedaron hablando de SunStick (adulto) y preguntan "tonos/colores"
+    if (session.lastProductName === 'SunStick' && isAskColorsOrTones(t)) {
+      return res.status(200).json({
+        text:
+          `Los tonos de **SunStick** son: **Blanco / Light / Medium / Dark**.\n` +
+          `Acá podés verlos (y elegir) 👇`,
+        links: [{ label: 'Ver tonos SunStick (Ozone)', url: OZONE_TONES_URL }],
+        meta: { intent: 'tones', status: 'ok', product: 'sunstick' }
+      });
+    }
+
     // B) Precio SunStick Kids (respuesta directa + diferencial “apto bebés/niños”)
     if (mentionsSunstick(t) && mentionsKids(t) && isAskPrice(t)) {
+      session.lastProductName = 'SunStick Kids';
       return res.status(200).json({
         text:
           `Para **SunStick Kids**, el precio y los colores están siempre actualizados en la tienda 👇\n\n` +
           `Dato importante: es un protector pensado para chicos y se puede usar desde bebés.\n` +
-          `Si querés, decime si lo querés por **color** (Azul / Verde / Amarillo) y te ayudo a elegir.`,
+          `Si querés, lo podés elegir por **color** (Azul / Verde / Amarillo).`,
         links: [{ label: 'SunStick Kids (colores y precio)', url: OZONE_KIDS_URL }],
         meta: { intent: 'price', status: 'ok', product: 'sunstick_kids' }
       });
@@ -182,6 +216,7 @@ router.post('/', async (req, res) => {
 
     // C) Precio SunStick (adulto) — recomendación SOLO por tono/color
     if (mentionsSunstick(t) && isAskPrice(t)) {
+      session.lastProductName = 'SunStick';
       const lines = SUNSTICKS.map(
         (x) =>
           `• ${x.name}: ${formatArs(x.price)}. ` +
@@ -192,8 +227,7 @@ router.post('/', async (req, res) => {
         text:
           `${lines}\n\n` +
           `Los tonos son **Light / Medium / Dark** (y también **Blanco** en la guía de tonos).\n` +
-          `Si me decís tu tono (clara / media / oscura) te digo cuál te conviene.\n` +
-          `Si preferís, acá podés ver todos los tonos y elegir 👇`,
+          `Si querés, te paso el link de tonos para que elijas 👇`,
         links: [
           { label: 'SunStick Light', url: SUNSTICKS[0].url },
           { label: 'SunStick Medium', url: SUNSTICKS[1].url },
@@ -211,6 +245,55 @@ router.post('/', async (req, res) => {
     let effectiveText = userText;
 
     if (session.lastProductName) {
+      // Para SunStick y SunStick Kids, si dicen "precio" o "link" lo resolvemos dentro del wrapper
+      if (isBarePrice(t) && (session.lastProductName === 'SunStick' || session.lastProductName === 'SunStick Kids')) {
+        if (session.lastProductName === 'SunStick Kids') {
+          return res.status(200).json({
+            text:
+              `Para **SunStick Kids**, el precio y los colores están siempre actualizados en la tienda 👇\n` +
+              `Colores: **Azul / Verde / Amarillo**.`,
+            links: [{ label: 'SunStick Kids (colores y precio)', url: OZONE_KIDS_URL }],
+            meta: { intent: 'price', status: 'ok', product: 'sunstick_kids' }
+          });
+        }
+
+        const lines = SUNSTICKS.map(
+          (x) =>
+            `• ${x.name}: ${formatArs(x.price)}. ` +
+            `Pagando por transferencia: ${formatArs(x.transfer)}.`
+        ).join('\n');
+
+        return res.status(200).json({
+          text:
+            `${lines}\n\n` +
+            `Tonos: **Blanco / Light / Medium / Dark**.\n` +
+            `Guía de tonos 👇`,
+          links: [
+            { label: 'SunStick Light', url: SUNSTICKS[0].url },
+            { label: 'SunStick Medium', url: SUNSTICKS[1].url },
+            { label: 'SunStick Dark', url: SUNSTICKS[2].url },
+            { label: 'Ver todos los tonos', url: OZONE_TONES_URL }
+          ],
+          meta: { intent: 'price', status: 'ok', product: 'sunstick' }
+        });
+      }
+
+      if (isBareLink(t) && (session.lastProductName === 'SunStick' || session.lastProductName === 'SunStick Kids')) {
+        if (session.lastProductName === 'SunStick Kids') {
+          return res.status(200).json({
+            text: `Acá tenés el link de **SunStick Kids** 👇`,
+            links: [{ label: 'SunStick Kids', url: OZONE_KIDS_URL }],
+            meta: { intent: 'link', status: 'ok', product: 'sunstick_kids' }
+          });
+        }
+        return res.status(200).json({
+          text: `Acá tenés la guía de tonos de **SunStick** 👇`,
+          links: [{ label: 'Ver tonos SunStick', url: OZONE_TONES_URL }],
+          meta: { intent: 'link', status: 'ok', product: 'sunstick' }
+        });
+      }
+
+      // Default: autocomplete hacia el core para productos de Maria T
       if (isBarePrice(t)) effectiveText = `cuanto cuesta ${session.lastProductName}`;
       else if (isBareLink(t)) effectiveText = `link de ${session.lastProductName}`;
       else if (isBareHow(t)) effectiveText = `como se usa ${session.lastProductName}`;
