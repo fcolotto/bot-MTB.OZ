@@ -47,7 +47,8 @@ function norm(str) {
   return String(str || '')
     .toLowerCase()
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')            // saca acentos
+    .replace(/[¿?¡!.,;:()[\]{}"']/g, ' ')      // saca puntuación (clave para "sunstick?")
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -66,7 +67,6 @@ function isBareHow(t) {
 
 function formatArs(n) {
   if (typeof n !== 'number') return '';
-  // es-AR para miles con punto y sin decimales
   return `$ ${n.toLocaleString('es-AR')}`;
 }
 
@@ -118,29 +118,32 @@ const SUNSTICKS = [
 ];
 
 const OZONE_TONES_URL = 'https://www.ozonelifestyle.com/tonos/';
+const OZONE_KIDS_URL = 'https://www.ozonelifestyle.com/kids/';
 
 function isAskSunProtection(t) {
-  // preguntas sobre protección solar
   return (
     t.includes('proteccion solar') ||
-    t.includes('protección solar') ||
     t.includes('protector solar') ||
     t.includes('fps')
   );
 }
 
+// regex robusto: sunstick / sun stick / sun-stick
 function mentionsSunstick(t) {
-  return t.includes('sunstick') || t.includes('sun stick');
+  return /\bsun\s*-?\s*stick\b/.test(t);
+}
+
+// kids: kids/kid/niños/ninos/infantil
+function mentionsKids(t) {
+  return /\bkids?\b/.test(t) || /\bni(n|ñ)os?\b/.test(t) || t.includes('infantil');
 }
 
 function isAskPrice(t) {
   return (
-    t.includes('precio') ||
-    t.includes('cuanto cuesta') ||
-    t.includes('cuánto cuesta') ||
-    t.includes('cuanto sale') ||
-    t.includes('cuánto sale') ||
-    t.includes('valor')
+    /\bprecio(s)?\b/.test(t) ||
+    /\bcuanto cuesta\b/.test(t) ||
+    /\bcuanto sale\b/.test(t) ||
+    /\bvalor\b/.test(t)
   );
 }
 
@@ -166,13 +169,26 @@ router.post('/', async (req, res) => {
           `**${session.lastProductName}** no tiene protección solar.\n\n` +
           `Si buscás protección, en **Ozone Lifestyle** tenemos los **SunStick FPS 45+** (formato barra, sustentables y con tonos).\n` +
           `¿Querés que te pase el **precio** del SunStick y te ayude a elegir el tono?`,
-        links: [{ label: 'Ver tonos SunStick (Ozone)', url: OZONE_TONES_URL }],
+        links: [
+          { label: 'Ver tonos SunStick (Ozone)', url: OZONE_TONES_URL },
+          { label: 'SunStick Kids (Ozone)', url: OZONE_KIDS_URL }
+        ],
         meta: { intent: 'sun', status: 'ok' }
       });
     }
 
-    // B) Si pregunta por precio del SunStick:
-    //    devolver precios + transferencia + links + pregunta por tono/piel
+    // B) Si pregunta por precio del SunStick Kids (prioridad sobre el genérico)
+    if (mentionsSunstick(t) && mentionsKids(t) && isAskPrice(t)) {
+      return res.status(200).json({
+        text:
+          `Para **SunStick Kids**, podés ver los **colores** y el **precio actualizado** en la tienda 👇\n` +
+          `Si me decís la edad del nene/a y si tiene piel muy clara o sensible, también te doy una recomendación rápida.`,
+        links: [{ label: 'SunStick Kids (colores y precio)', url: OZONE_KIDS_URL }],
+        meta: { intent: 'price', status: 'ok', product: 'sunstick_kids' }
+      });
+    }
+
+    // C) Si pregunta por precio del SunStick (adulto)
     if (mentionsSunstick(t) && isAskPrice(t)) {
       const lines = SUNSTICKS.map(
         (x) =>
@@ -189,7 +205,8 @@ router.post('/', async (req, res) => {
           { label: 'SunStick Light', url: SUNSTICKS[0].url },
           { label: 'SunStick Medium', url: SUNSTICKS[1].url },
           { label: 'SunStick Dark', url: SUNSTICKS[2].url },
-          { label: 'Ver todos los tonos', url: OZONE_TONES_URL }
+          { label: 'Ver todos los tonos', url: OZONE_TONES_URL },
+          { label: 'SunStick Kids', url: OZONE_KIDS_URL }
         ],
         meta: { intent: 'price', status: 'ok', product: 'sunstick' }
       });
