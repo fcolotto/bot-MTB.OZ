@@ -48,7 +48,7 @@ function norm(str) {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')            // saca acentos
-    .replace(/[¿?¡!.,;:()[\]{}"']/g, ' ')      // saca puntuación (clave para "sunstick?")
+    .replace(/[¿?¡!.,;:()[\]{}"']/g, ' ')      // saca puntuación
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -70,10 +70,6 @@ function formatArs(n) {
   return `$ ${n.toLocaleString('es-AR')}`;
 }
 
-/**
- * Heurística: si el usuario preguntó "cuanto cuesta X" / "precio X", guardamos X como lastProductName.
- * (No tocamos el core.)
- */
 function extractProductNameFromUserText(userText) {
   const patterns = [
     /^precio de (.+)$/i,
@@ -93,9 +89,8 @@ function extractProductNameFromUserText(userText) {
 }
 
 // =========================
-// Ozone SunStick (hardcode rápido)
+// Ozone SunStick
 // =========================
-// Si mañana querés automatizarlo, lo conectamos a tu tienda-api de Ozone.
 const SUNSTICKS = [
   {
     name: 'SunStick FPS 45+ Light',
@@ -128,14 +123,12 @@ function isAskSunProtection(t) {
   );
 }
 
-// regex robusto: sunstick / sun stick / sun-stick
 function mentionsSunstick(t) {
   return /\bsun\s*-?\s*stick\b/.test(t);
 }
 
-// kids: kids/kid/niños/ninos/infantil
 function mentionsKids(t) {
-  return /\bkids?\b/.test(t) || /\bni(n|ñ)os?\b/.test(t) || t.includes('infantil');
+  return /\bkids?\b/.test(t) || /\bni(n|ñ)os?\b/.test(t) || t.includes('infantil') || t.includes('bebe') || t.includes('bebé');
 }
 
 function isAskPrice(t) {
@@ -160,15 +153,13 @@ router.post('/', async (req, res) => {
     // 0) Atajos conversacionales anclados a memoria (UX)
     // ======================================================
 
-    // A) Si pregunta por protección solar y venía hablando de un producto:
-    //    responder nombrando explícitamente el producto + upsell a SunStick
-    //    (y NO manda al core).
+    // A) Pregunta por protección solar + venía hablando de un producto
     if (isAskSunProtection(t) && session.lastProductName && !mentionsSunstick(t)) {
       return res.status(200).json({
         text:
           `**${session.lastProductName}** no tiene protección solar.\n\n` +
-          `Si buscás protección, en **Ozone Lifestyle** tenemos los **SunStick FPS 45+** (formato barra, sustentables y con tonos).\n` +
-          `¿Querés que te pase el **precio** del SunStick y te ayude a elegir el tono?`,
+          `Si buscás protección, en **Ozone Lifestyle** tenemos los **SunStick FPS 45+** (formato barra, sustentables).\n` +
+          `¿Querés que te pase el **precio** y los links a los tonos?`,
         links: [
           { label: 'Ver tonos SunStick (Ozone)', url: OZONE_TONES_URL },
           { label: 'SunStick Kids (Ozone)', url: OZONE_KIDS_URL }
@@ -177,18 +168,19 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // B) Si pregunta por precio del SunStick Kids (prioridad sobre el genérico)
+    // B) Precio SunStick Kids (respuesta directa + diferencial “apto bebés/niños”)
     if (mentionsSunstick(t) && mentionsKids(t) && isAskPrice(t)) {
       return res.status(200).json({
         text:
-          `Para **SunStick Kids**, podés ver los **colores** y el **precio actualizado** en la tienda 👇\n` +
-          `Si me decís la edad del nene/a y si tiene piel muy clara o sensible, también te doy una recomendación rápida.`,
+          `Para **SunStick Kids**, el precio y los colores están siempre actualizados en la tienda 👇\n\n` +
+          `Dato importante: es un protector pensado para chicos y se puede usar desde bebés.\n` +
+          `Si querés, decime si lo querés por **color** (Azul / Verde / Amarillo) y te ayudo a elegir.`,
         links: [{ label: 'SunStick Kids (colores y precio)', url: OZONE_KIDS_URL }],
         meta: { intent: 'price', status: 'ok', product: 'sunstick_kids' }
       });
     }
 
-    // C) Si pregunta por precio del SunStick (adulto)
+    // C) Precio SunStick (adulto) — recomendación SOLO por tono/color
     if (mentionsSunstick(t) && isAskPrice(t)) {
       const lines = SUNSTICKS.map(
         (x) =>
@@ -199,7 +191,8 @@ router.post('/', async (req, res) => {
       return res.status(200).json({
         text:
           `${lines}\n\n` +
-          `Hay tonos (Light / Medium / Dark). Si me contás tu tono de piel (clara / media / oscura) o si usás alguna base (marca y tono), te recomiendo el más parecido.\n` +
+          `Los tonos son **Light / Medium / Dark** (y también **Blanco** en la guía de tonos).\n` +
+          `Si me decís tu tono (clara / media / oscura) te digo cuál te conviene.\n` +
           `Si preferís, acá podés ver todos los tonos y elegir 👇`,
         links: [
           { label: 'SunStick Light', url: SUNSTICKS[0].url },
