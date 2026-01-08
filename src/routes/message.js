@@ -1,3 +1,4 @@
+console.log('[message] wrapper v2 loaded');
 const express = require('express');
 const { handleMessage } = require('../core/messageHandler');
 
@@ -39,7 +40,9 @@ setInterval(() => {
   }
 }, CLEANUP_MS);
 
-// Normalización simple
+// =========================
+// Helpers
+// =========================
 function norm(str) {
   return String(str || '')
     .toLowerCase()
@@ -61,18 +64,17 @@ function isBareHow(t) {
   return t === 'como se usa' || t === 'cómo se usa' || t === 'modo de uso' || t === 'como usar';
 }
 
+function formatArs(n) {
+  if (typeof n !== 'number') return '';
+  // es-AR para miles con punto y sin decimales
+  return `$ ${n.toLocaleString('es-AR')}`;
+}
+
 /**
- * Heurística: si la respuesta fue de intent price ok, o si el texto venía con "cuanto cuesta X",
- * o si el usuario mencionó "precio X", guardamos X como lastProductName.
- *
- * Como no tocamos el core, esto se apoya en:
- * - meta.product_id si viene
- * - el propio texto del usuario
+ * Heurística: si el usuario preguntó "cuanto cuesta X" / "precio X", guardamos X como lastProductName.
+ * (No tocamos el core.)
  */
 function extractProductNameFromUserText(userText) {
-  const t = norm(userText);
-
-  // patrones comunes
   const patterns = [
     /^precio de (.+)$/i,
     /^precio (.+)$/i,
@@ -87,8 +89,59 @@ function extractProductNameFromUserText(userText) {
     const m = String(userText || '').match(re);
     if (m && m[1]) return m[1].trim();
   }
-
   return null;
+}
+
+// =========================
+// Ozone SunStick (hardcode rápido)
+// =========================
+// Si mañana querés automatizarlo, lo conectamos a tu tienda-api de Ozone.
+const SUNSTICKS = [
+  {
+    name: 'SunStick FPS 45+ Light',
+    price: 28600,
+    transfer: 25740,
+    url: 'https://www.ozonelifestyle.com/productos/sunstick-fps-45-light/'
+  },
+  {
+    name: 'SunStick FPS 45+ Medium',
+    price: 28600,
+    transfer: 25740,
+    url: 'https://www.ozonelifestyle.com/productos/sunstick-fps-45-medium/'
+  },
+  {
+    name: 'SunStick FPS 45+ Dark',
+    price: 28600,
+    transfer: 25740,
+    url: 'https://www.ozonelifestyle.com/productos/sunstick-fps-45-dark/'
+  }
+];
+
+const OZONE_TONES_URL = 'https://www.ozonelifestyle.com/tonos/';
+
+function isAskSunProtection(t) {
+  // preguntas sobre protección solar
+  return (
+    t.includes('proteccion solar') ||
+    t.includes('protección solar') ||
+    t.includes('protector solar') ||
+    t.includes('fps')
+  );
+}
+
+function mentionsSunstick(t) {
+  return t.includes('sunstick') || t.includes('sun stick');
+}
+
+function isAskPrice(t) {
+  return (
+    t.includes('precio') ||
+    t.includes('cuanto cuesta') ||
+    t.includes('cuánto cuesta') ||
+    t.includes('cuanto sale') ||
+    t.includes('cuánto sale') ||
+    t.includes('valor')
+  );
 }
 
 router.post('/', async (req, res) => {
@@ -100,7 +153,51 @@ router.post('/', async (req, res) => {
     const userText = String(body.text || '').trim();
     const t = norm(userText);
 
+    // ======================================================
+    // 0) Atajos conversacionales anclados a memoria (UX)
+    // ======================================================
+
+    // A) Si pregunta por protección solar y venía hablando de un producto:
+    //    responder nombrando explícitamente el producto + upsell a SunStick
+    //    (y NO manda al core).
+    if (isAskSunProtection(t) && session.lastProductName && !mentionsSunstick(t)) {
+      return res.status(200).json({
+        text:
+          `**${session.lastProductName}** no tiene protección solar.\n\n` +
+          `Si buscás protección, en **Ozone Lifestyle** tenemos los **SunStick FPS 45+** (formato barra, sustentables y con tonos).\n` +
+          `¿Querés que te pase el **precio** del SunStick y te ayude a elegir el tono?`,
+        links: [{ label: 'Ver tonos SunStick (Ozone)', url: OZONE_TONES_URL }],
+        meta: { intent: 'sun', status: 'ok' }
+      });
+    }
+
+    // B) Si pregunta por precio del SunStick:
+    //    devolver precios + transferencia + links + pregunta por tono/piel
+    if (mentionsSunstick(t) && isAskPrice(t)) {
+      const lines = SUNSTICKS.map(
+        (x) =>
+          `• ${x.name}: ${formatArs(x.price)}. ` +
+          `Pagando por transferencia: ${formatArs(x.transfer)}.`
+      ).join('\n');
+
+      return res.status(200).json({
+        text:
+          `${lines}\n\n` +
+          `Hay tonos (Light / Medium / Dark). Si me contás tu tono de piel (clara / media / oscura) o si usás alguna base (marca y tono), te recomiendo el más parecido.\n` +
+          `Si preferís, acá podés ver todos los tonos y elegir 👇`,
+        links: [
+          { label: 'SunStick Light', url: SUNSTICKS[0].url },
+          { label: 'SunStick Medium', url: SUNSTICKS[1].url },
+          { label: 'SunStick Dark', url: SUNSTICKS[2].url },
+          { label: 'Ver todos los tonos', url: OZONE_TONES_URL }
+        ],
+        meta: { intent: 'price', status: 'ok', product: 'sunstick' }
+      });
+    }
+
+    // ======================================================
     // 1) Autocomplete intents cortos usando lastProductName
+    // ======================================================
     let effectiveText = userText;
 
     if (session.lastProductName) {
@@ -109,19 +206,18 @@ router.post('/', async (req, res) => {
       else if (isBareHow(t)) effectiveText = `como se usa ${session.lastProductName}`;
     }
 
+    // ======================================================
     // 2) Llamar al core
+    // ======================================================
     const result = await handleMessage({ ...body, text: effectiveText });
 
-    // 3) Si el usuario preguntó precio de X, guardamos X
-    //    Esto arregla tu caso: después "precio" funciona.
+    // ======================================================
+    // 3) Guardar lastProductName desde el texto del usuario
+    // ======================================================
     const inferred = extractProductNameFromUserText(userText);
     if (inferred) {
       session.lastProductName = inferred;
     }
-
-    // 4) Si el core devuelve meta.product_id OK y el usuario mencionó algo como "cuanto cuesta X",
-    //    mantenemos la inferencia ya guardada arriba.
-    //    (Si en el futuro el core te devuelve meta.product_name, acá lo podrías guardar directo.)
 
     return res.status(result.status).json(result.body);
   } catch (error) {
