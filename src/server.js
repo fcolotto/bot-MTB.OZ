@@ -8,6 +8,7 @@ const healthRoute = require('./routes/health');
 const messageRoute = require('./routes/message');
 const whatsappRoute = require('./routes/whatsapp');
 const debugRoute = require('./routes/debug');
+const healthOzoneRoute = require('./routes/healthOzone');
 
 const app = express();
 app.disable('x-powered-by');
@@ -39,6 +40,9 @@ app.use('/whatsapp', whatsappRoute);
 app.use('/health', healthRoute);
 app.use('/message', messageRoute);
 app.use('/debug', debugRoute);
+app.use('/health', healthOzoneRoute);
+app.use('/ozone', ozoneRoute);
+
 
 // Error handler
 app.use((err, req, res, next) => {
