@@ -1,5 +1,4 @@
 const express = require("express");
-const fetch = require("node-fetch");
 
 const router = express.Router();
 
@@ -11,7 +10,7 @@ router.get("/ozone", async (req, res) => {
     if (!storeId || !token) {
       return res.status(500).json({
         ok: false,
-        error: "Missing OZONE_STORE_ID or OZONE_ACCESS_TOKEN in env"
+        error: "Missing OZONE_STORE_ID or OZONE_ACCESS_TOKEN in env",
       });
     }
 
@@ -19,8 +18,8 @@ router.get("/ozone", async (req, res) => {
       headers: {
         Authentication: `bearer ${token}`,
         "User-Agent": process.env.TN_USER_AGENT || "Ozone Bot",
-        "Content-Type": "application/json"
-      }
+        "Content-Type": "application/json",
+      },
     });
 
     const data = await r.json();

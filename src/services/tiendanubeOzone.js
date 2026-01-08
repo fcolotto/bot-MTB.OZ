@@ -1,6 +1,3 @@
-
-const fetch = require("node-fetch");
-
 function tnHeaders() {
   const token = process.env.OZONE_ACCESS_TOKEN;
   const ua = process.env.TN_USER_AGENT || "Ozone Bot";
@@ -86,7 +83,10 @@ async function listProductsPage(page = 1, perPage = 50) {
 async function findBestProduct(q) {
   // estrategia: traer 2 páginas (100 productos) y matchear.
   // si tu catálogo es enorme, después lo optimizamos con cache.
-  const pages = await Promise.all([listProductsPage(1, 50), listProductsPage(2, 50)]);
+  const pages = await Promise.all([
+    listProductsPage(1, 50),
+    listProductsPage(2, 50),
+  ]);
 
   const all = [...pages[0], ...pages[1]];
   let best = null;
@@ -108,7 +108,7 @@ async function findBestProduct(q) {
     name: getName(best),
     price: getPrice(best),
     url: getUrl(best),
-    available: best?.stock_management ? (best?.stock > 0) : true,
+    available: best?.stock_management ? best?.stock > 0 : true,
     score: bestScore,
   };
 }
