@@ -26,6 +26,32 @@ const faqData = require('../data/faq.json');
 const ozoneData = require('../data/ozone.json');
 const { normalize } = require('./normalize');
 
+/**
+ * =========================
+ * Memoria corta (RAM)
+ * =========================
+ * Sirve para follow-ups tipo:
+ * - "hola cuanto sale piel iluminada" -> responde ambos
+ * - "y la corporal?" -> responde corporal (sin repetir "precio")
+ *
+ * Nota: se borra en redeploy, pero está bien para WhatsApp.
+ */
+const shortMemory = new Map();
+
+function memKey(channel, userId) {
+  return `${channel}:${userId}`;
+}
+
+function getMem(channel, userId) {
+  return shortMemory.get(memKey(channel, userId)) || {};
+}
+
+function setMem(channel, userId, patch) {
+  const key = memKey(channel, userId);
+  const prev = shortMemory.get(key) || {};
+  shortMemory.set(key, { ...prev, ...patch, ts: Date.now() });
+}
+
 function extractProductQuery(text, keywords) {
   const normalized = normalize(text);
   let result = normalized;
@@ -104,36 +130,58 @@ async function handleMessage(payload) {
 
   const intentData = detectIntent(text);
 
+  // --- Follow-up resolver ---
+  // Si el intent vino como unknown/greet pero el usuario viene de preguntar un precio,
+  // interpretamos "y la corporal?" / "y pocket?" como continuación.
+  const mem = getMem(channel, userId);
+  let resolvedIntent = intentData;
+
+  const n = normalize(text);
+  const looksLikeFollowUp =
+    n.startsWith('y ') ||
+    n.startsWith('y la') ||
+    n.startsWith('y el') ||
+    n.includes('la corporal') ||
+    n.includes('el corporal') ||
+    n.includes('corporal') ||
+    n.includes('pocket') ||
+    n.match(/\b195\b/) ||
+    n.match(/\b50\b/);
+
+  if ((intentData.intent === 'unknown' || intentData.intent === 'greet') && mem.lastIntent === 'price' && looksLikeFollowUp) {
+    resolvedIntent = { intent: 'price', _followUp: true };
+  }
+
   try {
     // ---- GREET ----
-    if (intentData.intent === 'greet') {
+    if (resolvedIntent.intent === 'greet') {
       return { status: 200, body: composeGreetResponse() };
     }
 
     // ---- PROMOS ----
-    if (intentData.intent === 'promos') {
+    if (resolvedIntent.intent === 'promos') {
       return { status: 200, body: composePromosResponse() };
     }
 
     // ---- PAYMENTS ----
-    if (intentData.intent === 'payments') {
+    if (resolvedIntent.intent === 'payments') {
       return { status: 200, body: composePaymentsResponse() };
     }
 
     // ---- INSTALLMENTS ----
-    if (intentData.intent === 'installments') {
+    if (resolvedIntent.intent === 'installments') {
       return { status: 200, body: composeInstallmentsResponse() };
     }
 
     // ---- SHIPPING ----
-    if (intentData.intent === 'shipping') {
+    if (resolvedIntent.intent === 'shipping') {
       return { status: 200, body: composeShippingResponse() };
     }
 
     // ---- ORDER ----
-    if (intentData.intent === 'order') {
-      if (intentData.orderId) {
-        const order = await tiendaApi.getOrder(intentData.orderId);
+    if (resolvedIntent.intent === 'order') {
+      if (resolvedIntent.orderId) {
+        const order = await tiendaApi.getOrder(resolvedIntent.orderId);
         return { status: 200, body: composeOrderResponse(order) };
       }
 
@@ -148,11 +196,11 @@ async function handleMessage(payload) {
     }
 
     // ---- SUN / OZONE / SUNSTICK ----
-    if (intentData.intent === 'ozone' || intentData.intent === 'sunstick' || intentData.intent === 'sun') {
+    if (resolvedIntent.intent === 'ozone' || resolvedIntent.intent === 'sunstick' || resolvedIntent.intent === 'sun') {
       const ozoneProduct = await productResolver.resolveProduct(ozoneData.query);
 
       // “piel iluminada + playa/sol” => NO SPF + Ozone
-      if (intentData.intent === 'sun' && looksLikePielIluminada(text)) {
+      if (resolvedIntent.intent === 'sun' && looksLikePielIluminada(text)) {
         const mtb = await productResolver.resolveProduct('piel iluminada');
         return {
           status: 200,
@@ -160,11 +208,11 @@ async function handleMessage(payload) {
         };
       }
 
-      if (intentData.intent === 'sunstick') {
+      if (resolvedIntent.intent === 'sunstick') {
         return { status: 200, body: composeSunstickResponse({ ozoneLink: ozoneProduct }) };
       }
 
-      if (intentData.intent === 'ozone') {
+      if (resolvedIntent.intent === 'ozone') {
         return { status: 200, body: composeOzoneResponse({ ozoneLink: ozoneProduct }) };
       }
 
@@ -173,10 +221,25 @@ async function handleMessage(payload) {
     }
 
     // ---- PRICE ----
-    if (intentData.intent === 'price') {
+    if (resolvedIntent.intent === 'price') {
       const productQuery = extractProductQuery(text, [
         'precio','cuesta','vale','valor','cuanto','cuánto','coste','costo','sale'
       ]);
+
+      // Follow-up: veníamos de Piel Iluminada y ahora dice "y la corporal?"
+      const mem2 = getMem(channel, userId);
+      if (!looksLikePielIluminada(text) && mem2.lastProductFamily === 'piel iluminada') {
+        if (wantsCorporalOr195(text)) {
+          const corporal = await productResolver.resolveProduct('piel iluminada corporal');
+          setMem(channel, userId, { lastIntent: 'price', lastProductFamily: 'piel iluminada' });
+          return { status: 200, body: composePriceResponse(corporal) };
+        }
+        if (wantsPocketOr50(text)) {
+          const pocket = await productResolver.resolveProduct('piel iluminada pocket');
+          setMem(channel, userId, { lastIntent: 'price', lastProductFamily: 'piel iluminada' });
+          return { status: 200, body: composePriceResponse(pocket) };
+        }
+      }
 
       // Caso especial: Piel iluminada (Pocket + Corporal) => MTB
       if (looksLikePielIluminada(text)) {
@@ -185,11 +248,13 @@ async function handleMessage(payload) {
 
         if (wantPocket && !wantCorporal) {
           const pocket = await productResolver.resolveProduct('piel iluminada pocket');
+          setMem(channel, userId, { lastIntent: 'price', lastProductFamily: 'piel iluminada' });
           return { status: 200, body: composePriceResponse(pocket) };
         }
 
         if (wantCorporal && !wantPocket) {
           const corporal = await productResolver.resolveProduct('piel iluminada corporal');
+          setMem(channel, userId, { lastIntent: 'price', lastProductFamily: 'piel iluminada' });
           return { status: 200, body: composePriceResponse(corporal) };
         }
 
@@ -197,6 +262,8 @@ async function handleMessage(payload) {
         const pocket = await productResolver.resolveProduct('piel iluminada pocket');
         const corporal = await productResolver.resolveProduct('piel iluminada corporal');
         const list = [pocket, corporal].filter(Boolean);
+
+        setMem(channel, userId, { lastIntent: 'price', lastProductFamily: 'piel iluminada' });
         return { status: 200, body: composePriceResponse(list) };
       }
 
@@ -207,6 +274,7 @@ async function handleMessage(payload) {
         const product = adaptOzoneProductForComposer(oz);
 
         if (!product) {
+          setMem(channel, userId, { lastIntent: 'price', lastBrand: 'ozone', lastQuery: q });
           return {
             status: 200,
             body: {
@@ -217,22 +285,24 @@ async function handleMessage(payload) {
           };
         }
 
+        setMem(channel, userId, { lastIntent: 'price', lastBrand: 'ozone', lastQuery: q });
         return { status: 200, body: composePriceResponse(product) };
       }
 
       // Default MTB
       const product = await productResolver.resolveProduct(productQuery || text);
+      setMem(channel, userId, { lastIntent: 'price', lastBrand: 'mtb', lastQuery: productQuery || text });
       return { status: 200, body: composePriceResponse(product) };
     }
 
     // ---- INFO ----
-    if (intentData.intent === 'info') {
+    if (resolvedIntent.intent === 'info') {
       const product = await productResolver.resolveProduct(text);
       return { status: 200, body: composeInfoResponse(product) };
     }
 
     // ---- FAQ (tipo “X tiene SPF?”) ----
-    if (intentData.intent === 'faq') {
+    if (resolvedIntent.intent === 'faq') {
       const productQuery = extractProductQuery(text, faqData.spf_keywords);
       const product = productQuery ? await productResolver.resolveProduct(productQuery) : null;
       const ozoneProduct = await productResolver.resolveProduct(ozoneData.query);

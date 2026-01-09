@@ -142,17 +142,21 @@ function detectIntent(text) {
   if (hasAny(t, ozoneKW) && hasAny(t, sunstickLookKW)) return { intent: "sunstick" };
   if (hasAny(t, sunstickLookKW) && t.includes("sunstick")) return { intent: "sunstick" };
 
-  // 7) Ozone general
+    // 7) PRICE (debe ir ANTES de ozone/sun/info)
+  if (hasAny(t, priceKW)) return { intent: "price" };
+
+  // 8) Sunstick “cómo queda / deja blanco” (más específico)
+  if (hasAny(t, ozoneKW) && hasAny(t, sunstickLookKW)) return { intent: "sunstick" };
+  if (hasAny(t, sunstickLookKW) && t.includes("sunstick")) return { intent: "sunstick" };
+
+  // 9) Ozone general
   if (hasAny(t, ozoneKW)) return { intent: "ozone" };
 
-  // 8) Sol/SPF general
+  // 10) Sol/SPF general
   if (hasAny(t, sunKW)) return { intent: "sun" };
 
-  // 9) info
+  // 11) info
   if (hasAny(t, infoKW)) return { intent: "info" };
-
-  // 10) price
-  if (hasAny(t, priceKW)) return { intent: "price" };
 
   return { intent: "unknown" };
 }
